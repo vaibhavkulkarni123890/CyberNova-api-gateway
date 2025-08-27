@@ -3696,6 +3696,11 @@ def handle_reset_scan_data(user_id, res):
             'error': f'Failed to reset scan data: {str(e)}'
         }, 500)
 
+# Appwrite Entry Point - This is what Appwrite will call
+def appwrite_main(req, res):
+    """Appwrite entry point - calls the main function"""
+    return main(req, res)
+
 if __name__ == "__main__":
     import uvicorn
     # Support deployment platforms that use PORT environment variable
