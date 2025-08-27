@@ -1,4 +1,4 @@
-# api-gateway/main.py - Complete CyberNova AI Backend
+# api-gateway/main.py - Complete CyberNova AI Backend with Appwrite Integration
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -37,7 +37,13 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://cybernova-de84b.web.app",
+        "https://cybernova-de84b.firebaseapp.com", 
+        "http://localhost:3000",
+        "http://localhost:80",
+        "*"  # Allow all for development
+    ],
     allow_credentials=True, 
     allow_methods=["*"], 
     allow_headers=["*"],
@@ -377,26 +383,39 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     return dict(user)
 
 def send_email(to_email: str, subject: str, body: str):
-    """Send a real email via SMTP (TLS)."""
+    """Send a real email via SMTP (TLS) with enhanced debugging."""
+    print(f"[DEBUG] Attempting to send email to {to_email}")
+    print(f"[DEBUG] Email config - Host: {EMAIL_HOST}, Port: {EMAIL_PORT}, User: {EMAIL_USER}")
+    
     if not all([EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASS]):
-        print("[WARN] Email not configured")
+        print("[ERROR] Email configuration incomplete!")
+        print(f"[DEBUG] Missing: Host={not EMAIL_HOST}, Port={not EMAIL_PORT}, User={not EMAIL_USER}, Pass={not EMAIL_PASS}")
         return
 
     msg = MIMEMultipart()
     msg["From"] = EMAIL_USER
     msg["To"] = to_email
     msg["Subject"] = subject
-    msg.attach(MIMEText(body, "plain"))
+    msg.attach(MIMEText(body, "html"))  # Changed to HTML for better formatting
 
     context = ssl.create_default_context()
     try:
+        print(f"[DEBUG] Connecting to SMTP server {EMAIL_HOST}:{EMAIL_PORT}")
         with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
             server.starttls(context=context)
+            print("[DEBUG] STARTTLS successful")
             server.login(EMAIL_USER, EMAIL_PASS)
+            print("[DEBUG] Login successful")
             server.sendmail(EMAIL_USER, to_email, msg.as_string())
-        print(f"[INFO] Email sent to {to_email}")
+            print(f"[SUCCESS] Email sent successfully to {to_email}")
+    except smtplib.SMTPAuthenticationError as e:
+        print(f"[ERROR] SMTP Authentication failed: {e}")
+        print("[HINT] Check if 2FA is enabled and use App Password instead")
+    except smtplib.SMTPException as e:
+        print(f"[ERROR] SMTP error: {e}")
     except Exception as e:
         print(f"[ERROR] Failed to send email: {e}")
+        print(f"[ERROR] Error type: {type(e).__name__}")
 
 
 # ============================================================================
@@ -431,25 +450,50 @@ async def register_user(user_data: UserRegister, background_tasks: BackgroundTas
     # Create JWT token
     token = create_jwt_token(user_id, user_data.email)
     
-    # Send welcome email
+    # Send welcome email using HTML format
     welcome_email = f"""
-🛡️ Welcome to CyberNova AI!
-
-Hi {user_data.full_name},
-
-Your account has been successfully created! You now have access to our advanced cybersecurity platform.
-
-🚀 What's Next:
-✅ Complete your security profile
-✅ Set up threat monitoring
-✅ Configure alert preferences
-✅ Explore AI-powered analytics
-
-🔗 Login to your dashboard: http://localhost:3000/dashboard
-
-Best regards,
-The CyberNova AI Team
-cybernova073@gmail.com
+    <html>
+    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+        <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+            <h1 style="color: #1976d2;">🛡️ Welcome to CyberNova AI!</h1>
+            
+            <p>Hi <strong>{user_data.full_name}</strong>,</p>
+            
+            <p>Your account has been successfully created! You now have access to our advanced cybersecurity platform.</p>
+            
+            <div style="background: #f5f5f5; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                <p><strong>🔗 Access Your Dashboard:</strong></p>
+                <a href="https://cybernova-de84b.web.app/dashboard" style="color: #1976d2; text-decoration: none; font-weight: bold;">https://cybernova-de84b.web.app/dashboard</a>
+            </div>
+            
+            <h3 style="color: #1976d2;">🚀 What's Next:</h3>
+            <ul>
+                <li>✅ Complete your security profile</li>
+                <li>✅ Set up threat monitoring</li>
+                <li>✅ Configure alert preferences</li>
+                <li>✅ Explore AI-powered analytics</li>
+                <li>✅ Run your first security scan</li>
+            </ul>
+            
+            <h3 style="color: #1976d2;">🛡️ Platform Features:</h3>
+            <ul>
+                <li>• Real-time threat detection</li>
+                <li>• AI-powered risk assessment</li>
+                <li>• Automated security scanning</li>
+                <li>• 24/7 monitoring and alerts</li>
+                <li>• Advanced analytics dashboard</li>
+            </ul>
+            
+            <p>Need help? Visit: <a href="https://cybernova-de84b.web.app/" style="color: #1976d2;">https://cybernova-de84b.web.app/</a></p>
+            
+            <hr style="margin: 30px 0; border: none; border-top: 1px solid #eee;">
+            
+            <p>Best regards,<br>
+            <strong>The CyberNova AI Team</strong><br>
+            <a href="mailto:cybernova073@gmail.com" style="color: #1976d2;">cybernova073@gmail.com</a></p>
+        </div>
+    </body>
+    </html>
     """
     
     background_tasks.add_task(
@@ -533,34 +577,51 @@ async def join_waitlist(waitlist_entry: WaitlistEntry, background_tasks: Backgro
     conn.commit()
     conn.close()
     
-    # Send waitlist email
+    # Send waitlist email using HTML format
     waitlist_email = f"""
-🛡️ CyberNova AI - Next-Generation Cybersecurity Platform
-
-Thank you for joining our exclusive waitlist!
-
-🗓️ LAUNCH DATE: September 15, 2025
-
-What you'll get:
-✅ Early access to CyberNova AI platform
-✅ Special launch pricing (up to 50% off)
-✅ Priority customer support
-✅ Beta testing opportunities
-
-We're building the most advanced AI-powered cybersecurity
-platform ever created. You'll be among the first to experience:
-
-🔹 Real-time threat detection (<100ms response)
-🔹 AI-powered risk assessment
-🔹 Automated incident response
-🔹 Intelligent security analytics
-🔹 24/7 monitoring and alerts
-
-Stay tuned for more updates as we approach launch!
-
-Best regards,
-The CyberNova AI Team
-cybernova073@gmail.com
+    <html>
+    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+        <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+            <h1 style="color: #1976d2;">🛡️ CyberNova AI - Next-Generation Cybersecurity Platform</h1>
+            
+            <p>Thank you for joining our exclusive waitlist!</p>
+            
+            <div style="background: #e3f2fd; padding: 15px; border-radius: 8px; margin: 20px 0; text-align: center;">
+                <h2 style="color: #1976d2; margin: 0;">🌐 Platform Now Live!</h2>
+                <a href="https://cybernova-de84b.web.app/" style="color: #1976d2; text-decoration: none; font-weight: bold; font-size: 18px;">https://cybernova-de84b.web.app/</a>
+            </div>
+            
+            <h3 style="color: #1976d2;">🚀 What's Available Now:</h3>
+            <ul>
+                <li>✅ Full cybersecurity platform access</li>
+                <li>✅ Real-time threat detection</li>
+                <li>✅ AI-powered security analytics</li>
+                <li>✅ Advanced dashboard and reporting</li>
+                <li>✅ 24/7 monitoring capabilities</li>
+            </ul>
+            
+            <h3 style="color: #1976d2;">🔹 Platform Features:</h3>
+            <ul>
+                <li>• Real-time threat detection (&lt;100ms response)</li>
+                <li>• AI-powered risk assessment</li>
+                <li>• Automated incident response</li>
+                <li>• Intelligent security analytics</li>
+                <li>• 24/7 monitoring and alerts</li>
+            </ul>
+            
+            <div style="background: #f5f5f5; padding: 15px; border-radius: 8px; margin: 20px 0; text-align: center;">
+                <p><strong>🎯 Ready to secure your systems?</strong></p>
+                <a href="https://cybernova-de84b.web.app/register" style="background: #1976d2; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold;">Get Started Now</a>
+            </div>
+            
+            <hr style="margin: 30px 0; border: none; border-top: 1px solid #eee;">
+            
+            <p>Best regards,<br>
+            <strong>The CyberNova AI Team</strong><br>
+            <a href="mailto:cybernova073@gmail.com" style="color: #1976d2;">cybernova073@gmail.com</a></p>
+        </div>
+    </body>
+    </html>
     """
     
     background_tasks.add_task(
@@ -3242,6 +3303,306 @@ async def startup_event():
         print(f"⚠️ Startup failed: {e}")
         import traceback
         traceback.print_exc()
+
+# ============================================================================
+# APPWRITE FUNCTION HANDLER (Main Entry Point for Serverless)
+# ============================================================================
+
+def main(req, res):
+    """Main Appwrite function handler for serverless deployment"""
+    try:
+        # Parse the request data
+        if hasattr(req, 'body'):
+            body = req.body
+        else:
+            body = req.get('body', '{}')
+            
+        if isinstance(body, str):
+            data = json.loads(body)
+        else:
+            data = body
+            
+        # Extract the action and parameters
+        action = data.get('action')
+        user_id = data.get('userId')
+        
+        if action == 'getDashboardData':
+            # Handle dashboard data request
+            return handle_dashboard_data(user_id, res)
+        elif action == 'startScan':
+            # Handle scan start request
+            return handle_start_scan(user_id, data.get('scanType', 'manual'), res)
+        elif action == 'getThreatDetails':
+            # Handle threat details request
+            return handle_threat_details(user_id, data.get('threatId'), res)
+        elif action == 'resetScanData':
+            # Handle reset scan data request
+            return handle_reset_scan_data(user_id, res)
+        else:
+            return res.json({
+                'error': 'Unknown action',
+                'action': action
+            }, 400)
+            
+    except Exception as e:
+        return res.json({
+            'error': f'Function execution failed: {str(e)}'
+        }, 500)
+
+def handle_dashboard_data(user_id, res):
+    """Handle dashboard data request for Appwrite"""
+    try:
+        with get_db_connection() as conn:
+            # Get latest scan data
+            latest_scan = conn.execute("""
+                SELECT * FROM system_scans 
+                WHERE user_id = ? 
+                ORDER BY created_at DESC 
+                LIMIT 1
+            """, (user_id,)).fetchone()
+            
+            # Get stats
+            if latest_scan:
+                scan_id = latest_scan["scan_id"]
+                
+                process_threats = conn.execute("""
+                    SELECT COUNT(*) as count FROM suspicious_processes 
+                    WHERE scan_id = ? AND threat_level IN ('high', 'critical')
+                """, (scan_id,)).fetchone()["count"]
+                
+                port_threats = conn.execute("""
+                    SELECT COUNT(*) as count FROM risky_ports 
+                    WHERE scan_id = ? AND threat_level IN ('high', 'critical')
+                """, (scan_id,)).fetchone()["count"]
+                
+                network_threats = conn.execute("""
+                    SELECT COUNT(*) as count FROM network_connections 
+                    WHERE scan_id = ? AND threat_level IN ('high', 'critical')
+                """, (scan_id,)).fetchone()["count"]
+                
+                total_threats = process_threats + port_threats + network_threats
+                recorded_threats = latest_scan["threats_detected"] or 0
+                total_threats = max(total_threats, recorded_threats)
+            else:
+                total_threats = 0
+            
+            # Calculate metrics
+            risk_score = min(100, max(0, total_threats * 15))
+            system_health = max(0, 100 - (total_threats * 10))
+            
+            stats = {
+                "totalThreats": int(total_threats),
+                "activeAlerts": int(total_threats),
+                "riskScore": round(float(risk_score), 2),
+                "systemHealth": round(float(system_health), 2),
+                "lastScanTime": latest_scan["created_at"] if latest_scan else None,
+                "scanStatus": latest_scan["scan_status"] if latest_scan else "No scans yet"
+            }
+            
+            # Get alerts
+            alerts = []
+            if latest_scan:
+                scan_id = latest_scan["scan_id"]
+                
+                alerts_query = """
+                SELECT 
+                    'process_' || sp.name || '_' || sp.pid as id,
+                    'Suspicious Process: ' || sp.name as title,
+                    'Real threat detected: ' || sp.name || ' (PID: ' || sp.pid || ')' as description,
+                    sp.threat_level as severity,
+                    s.created_at as timestamp,
+                    'Local System' as sourceIp,
+                    CASE sp.threat_level 
+                        WHEN 'critical' THEN 90
+                        WHEN 'high' THEN 70
+                        ELSE 50
+                    END as riskScore,
+                    0 as isBlocked,
+                    'process' as type
+                FROM suspicious_processes sp
+                JOIN system_scans s ON sp.scan_id = s.scan_id
+                WHERE sp.scan_id = ? AND sp.threat_level IN ('high', 'critical')
+                
+                UNION ALL
+                
+                SELECT 
+                    'port_' || rp.port as id,
+                    'Risky Port: ' || rp.port || ' (' || COALESCE(rp.service, 'Unknown') || ')' as title,
+                    'Real vulnerability: ' || COALESCE(rp.reason, 'Port ' || rp.port || ' is exposed') as description,
+                    rp.threat_level as severity,
+                    s.created_at as timestamp,
+                    'Local System' as sourceIp,
+                    CASE rp.threat_level 
+                        WHEN 'critical' THEN 80
+                        WHEN 'high' THEN 60
+                        ELSE 40
+                    END as riskScore,
+                    0 as isBlocked,
+                    'port' as type
+                FROM risky_ports rp
+                JOIN system_scans s ON rp.scan_id = s.scan_id
+                WHERE rp.scan_id = ? AND rp.threat_level IN ('high', 'critical')
+                
+                ORDER BY timestamp DESC
+                """
+                
+                threats = conn.execute(alerts_query, (scan_id, scan_id)).fetchall()
+                
+                for threat in threats:
+                    alerts.append({
+                        "id": threat["id"],
+                        "title": threat["title"],
+                        "description": threat["description"],
+                        "severity": threat["severity"],
+                        "timestamp": threat["timestamp"],
+                        "sourceIp": threat["sourceIp"],
+                        "riskScore": threat["riskScore"],
+                        "isBlocked": bool(threat["isBlocked"]),
+                        "type": threat["type"],
+                        "isReal": True
+                    })
+            
+            # Get scan data
+            scan_data = None
+            if latest_scan:
+                scan_data = dict(latest_scan)
+                if scan_data.get("system_info"):
+                    try:
+                        scan_data["system_info"] = json.loads(scan_data["system_info"])
+                    except:
+                        pass
+        
+        return res.json({
+            'stats': stats,
+            'alerts': alerts,
+            'scanData': scan_data
+        })
+        
+    except Exception as e:
+        return res.json({
+            'error': f'Failed to get dashboard data: {str(e)}'
+        }, 500)
+
+def handle_start_scan(user_id, scan_type, res):
+    """Handle scan start request for Appwrite"""
+    try:
+        # Use real scanning function
+        scan_results = perform_real_threat_scan()
+        
+        # Store scan results
+        with get_db_connection() as conn:
+            scan_id = f"scan_{datetime.utcnow().timestamp()}"
+            
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO system_scans (scan_id, user_id, system_info, threats_detected, scan_status) VALUES (?, ?, ?, ?, ?)",
+                (scan_id, user_id, json.dumps(scan_results.get("system_info", {})), 
+                 scan_results.get("total_threats", 0), "completed")
+            )
+            conn.commit()
+        
+        return res.json({
+            "message": "System scan completed successfully",
+            "scan_id": scan_id,
+            "threats_detected": scan_results.get("total_threats", 0),
+            "status": "completed"
+        })
+        
+    except Exception as e:
+        return res.json({
+            'error': f'Scan failed: {str(e)}'
+        }, 500)
+
+def handle_threat_details(user_id, threat_id, res):
+    """Handle threat details request for Appwrite"""
+    try:
+        with get_db_connection() as conn:
+            # Parse threat ID to determine type
+            if threat_id.startswith("process_"):
+                parts = threat_id.replace("process_", "").split("_")
+                process_name = "_".join(parts[:-1]) if len(parts) > 1 else parts[0]
+                
+                threat_data = conn.execute("""
+                    SELECT sp.*, s.created_at, s.scan_id
+                    FROM suspicious_processes sp
+                    JOIN system_scans s ON sp.scan_id = s.scan_id
+                    WHERE s.user_id = ? AND sp.name LIKE ?
+                    ORDER BY s.created_at DESC
+                    LIMIT 1
+                """, (user_id, f"%{process_name}%")).fetchone()
+                
+                if not threat_data:
+                    return res.json({'error': 'Threat not found'}, 404)
+                    
+                return res.json({
+                    "id": threat_id,
+                    "type": "Suspicious Process",
+                    "name": process_name,
+                    "severity": threat_data["threat_level"],
+                    "riskScore": 90 if threat_data["threat_level"] == "critical" else 70,
+                    "detectedAt": threat_data["created_at"],
+                    "details": {
+                        "processName": process_name,
+                        "threatLevel": threat_data["threat_level"],
+                        "scanId": threat_data["scan_id"],
+                        "reasons": threat_data["threat_reasons"]
+                    },
+                    "isActive": True
+                })
+            
+            elif threat_id.startswith("port_"):
+                port_num = threat_id.replace("port_", "")
+                threat_data = conn.execute("""
+                    SELECT rp.*, s.created_at, s.scan_id
+                    FROM risky_ports rp
+                    JOIN system_scans s ON rp.scan_id = s.scan_id
+                    WHERE s.user_id = ? AND rp.port = ?
+                    ORDER BY s.created_at DESC
+                    LIMIT 1
+                """, (user_id, port_num)).fetchone()
+                
+                if not threat_data:
+                    return res.json({'error': 'Threat not found'}, 404)
+                    
+                return res.json({
+                    "id": threat_id,
+                    "type": "Risky Port",
+                    "name": f"Port {port_num}",
+                    "severity": threat_data["threat_level"],
+                    "riskScore": 80 if threat_data["threat_level"] == "critical" else 60,
+                    "detectedAt": threat_data["created_at"],
+                    "details": {
+                        "port": port_num,
+                        "service": threat_data["service"],
+                        "reason": threat_data["reason"],
+                        "threatLevel": threat_data["threat_level"]
+                    },
+                    "isActive": True
+                })
+        
+        return res.json({'error': 'Threat not found'}, 404)
+        
+    except Exception as e:
+        return res.json({
+            'error': f'Failed to get threat details: {str(e)}'
+        }, 500)
+
+def handle_reset_scan_data(user_id, res):
+    """Handle reset scan data request for Appwrite"""
+    try:
+        with get_db_connection() as conn:
+            # Delete user's scan data
+            conn.execute("DELETE FROM system_scans WHERE user_id = ?", (user_id,))
+            conn.commit()
+        
+        return res.json({
+            "message": "Scan data reset successfully"
+        })
+        
+    except Exception as e:
+        return res.json({
+            'error': f'Failed to reset scan data: {str(e)}'
+        }, 500)
 
 if __name__ == "__main__":
     import uvicorn
