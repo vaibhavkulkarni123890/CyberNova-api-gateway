@@ -1152,7 +1152,7 @@ def build_threat_summary_email(name: str, scan_id: str, processes: list, network
     lines.append("2. Close or restrict risky ports")
     lines.append("3. Monitor or block suspicious connections")
     lines.append("")
-    lines.append("Open Dashboard: http://localhost:3000/dashboard")
+    lines.append("Open Dashboard: https://cybernova-de84b.web.app/dashboard")
     body = "\n".join(lines)
     return subject, body
 
@@ -3236,7 +3236,7 @@ Your automated security scan has been completed. Here's what we found:
 4. Update your security software
 5. Enable firewall protection
 
-📱 Access your full security dashboard: http://localhost:3000/dashboard
+📱 Access your full security dashboard: https://cybernova-de84b.web.app/dashboard
 
 Stay secure!
 The CyberNova AI Security Team
@@ -3309,8 +3309,14 @@ async def startup_event():
 # ============================================================================
 
 def main(req, res):
-    """Main Appwrite function handler for serverless deployment"""
+    """Main Appwrite function handler for serverless deployment with enhanced debugging"""
     try:
+        print("[DEBUG] ========== CyberNova AI Function Started ==========")
+        
+        # Initialize database
+        init_database()
+        print("[DEBUG] Database initialized successfully")
+        
         # Parse the request data
         if hasattr(req, 'body'):
             body = req.body
@@ -3324,34 +3330,71 @@ def main(req, res):
             
         # Extract the action and parameters
         action = data.get('action')
-        user_id = data.get('userId')
+        user_id = data.get('userId', 'default_user')
+        
+        print(f"[DEBUG] Received action: {action}")
+        print(f"[DEBUG] User ID: {user_id}")
+        print(f"[DEBUG] Full request data: {data}")
+        
+        # Test system info collection on every request for debugging
+        test_system_info = get_real_system_info()
+        print(f"[DEBUG] System info test - Keys available: {list(test_system_info.keys())}")
+        print(f"[DEBUG] System info test - Hostname: {test_system_info.get('hostname')}")
+        print(f"[DEBUG] System info test - Platform: {test_system_info.get('platform')}")
+        print(f"[DEBUG] System info test - IP: {test_system_info.get('ip_address')}")
         
         if action == 'getDashboardData':
-            # Handle dashboard data request
+            print("[DEBUG] Processing getDashboardData request")
             return handle_dashboard_data(user_id, res)
         elif action == 'startScan':
-            # Handle scan start request
+            print("[DEBUG] Processing startScan request")
             return handle_start_scan(user_id, data.get('scanType', 'manual'), res)
         elif action == 'getThreatDetails':
-            # Handle threat details request
+            print("[DEBUG] Processing getThreatDetails request")
             return handle_threat_details(user_id, data.get('threatId'), res)
         elif action == 'resetScanData':
-            # Handle reset scan data request
+            print("[DEBUG] Processing resetScanData request")
             return handle_reset_scan_data(user_id, res)
+        elif action == 'testSystemInfo':
+            # Special test action for debugging system info
+            print("[DEBUG] Processing testSystemInfo request")
+            return res.json({
+                'action': 'testSystemInfo',
+                'system_info': test_system_info,
+                'timestamp': datetime.now(ist).isoformat(),
+                'status': 'success'
+            })
         else:
+            print(f"[ERROR] Unknown action received: {action}")
             return res.json({
                 'error': 'Unknown action',
-                'action': action
+                'action': action,
+                'available_actions': ['getDashboardData', 'startScan', 'getThreatDetails', 'resetScanData', 'testSystemInfo'],
+                'system_info_test': test_system_info,
+                'timestamp': datetime.now(ist).isoformat()
             }, 400)
             
     except Exception as e:
+        print(f"[ERROR] Function execution failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
+        # Return detailed error info for debugging
         return res.json({
-            'error': f'Function execution failed: {str(e)}'
+            'error': f'Function execution failed: {str(e)}',
+            'timestamp': datetime.now(ist).isoformat(),
+            'debug_info': {
+                'python_version': platform.python_version(),
+                'platform': platform.system(),
+                'hostname': platform.node(),
+                'error_type': type(e).__name__
+            }
         }, 500)
 
 def handle_dashboard_data(user_id, res):
-    """Handle dashboard data request for Appwrite"""
+    """Handle dashboard data request for Appwrite with enhanced system info"""
     try:
+        print(f"[DEBUG] Getting dashboard data for user: {user_id}")
         with get_db_connection() as conn:
             # Get latest scan data
             latest_scan = conn.execute("""
@@ -3361,9 +3404,12 @@ def handle_dashboard_data(user_id, res):
                 LIMIT 1
             """, (user_id,)).fetchone()
             
+            print(f"[DEBUG] Latest scan found: {latest_scan is not None}")
+            
             # Get stats
             if latest_scan:
                 scan_id = latest_scan["scan_id"]
+                print(f"[DEBUG] Processing scan_id: {scan_id}")
                 
                 process_threats = conn.execute("""
                     SELECT COUNT(*) as count FROM suspicious_processes 
@@ -3385,6 +3431,7 @@ def handle_dashboard_data(user_id, res):
                 total_threats = max(total_threats, recorded_threats)
             else:
                 total_threats = 0
+                print("[DEBUG] No scans found, using default values")
             
             # Calculate metrics
             risk_score = min(100, max(0, total_threats * 15))
@@ -3398,6 +3445,8 @@ def handle_dashboard_data(user_id, res):
                 "lastScanTime": latest_scan["created_at"] if latest_scan else None,
                 "scanStatus": latest_scan["scan_status"] if latest_scan else "No scans yet"
             }
+            
+            print(f"[DEBUG] Stats calculated: {stats}")
             
             # Get alerts
             alerts = []
@@ -3462,26 +3511,69 @@ def handle_dashboard_data(user_id, res):
                         "isReal": True
                     })
             
-            # Get scan data
+            # Get scan data with enhanced system info handling
             scan_data = None
             if latest_scan:
                 scan_data = dict(latest_scan)
                 if scan_data.get("system_info"):
                     try:
-                        scan_data["system_info"] = json.loads(scan_data["system_info"])
-                    except:
-                        pass
+                        parsed_system_info = json.loads(scan_data["system_info"])
+                        scan_data["system_info"] = parsed_system_info
+                        print(f"[DEBUG] System info parsed successfully: {list(parsed_system_info.keys())}")
+                    except Exception as parse_error:
+                        print(f"[ERROR] Failed to parse system_info: {parse_error}")
+                        # Try to get fresh system info if parsing fails
+                        scan_data["system_info"] = get_real_system_info()
+                else:
+                    print("[DEBUG] No system_info in scan_data, getting fresh info")
+                    scan_data["system_info"] = get_real_system_info()
+            else:
+                # If no scan exists, create minimal scan data with current system info
+                print("[DEBUG] No scan data found, creating fresh system info")
+                scan_data = {
+                    "scan_id": f"temp_{datetime.now(ist).timestamp()}",
+                    "user_id": user_id,
+                    "system_info": get_real_system_info(),
+                    "threats_detected": 0,
+                    "scan_status": "ready",
+                    "created_at": datetime.now(ist).isoformat()
+                }
         
-        return res.json({
+        response_data = {
             'stats': stats,
             'alerts': alerts,
             'scanData': scan_data
-        })
+        }
+        
+        print(f"[DEBUG] Returning response with system_info keys: {list(scan_data['system_info'].keys()) if scan_data and scan_data.get('system_info') else 'None'}")
+        
+        return res.json(response_data)
         
     except Exception as e:
-        return res.json({
-            'error': f'Failed to get dashboard data: {str(e)}'
-        }, 500)
+        print(f"[ERROR] Dashboard data failed: {str(e)}")
+        # Return error response with fallback system info for mobile testing
+        fallback_response = {
+            'stats': {
+                "totalThreats": 0,
+                "activeAlerts": 0,
+                "riskScore": 0,
+                "systemHealth": 100,
+                "lastScanTime": None,
+                "scanStatus": "Error occurred"
+            },
+            'alerts': [],
+            'scanData': {
+                "scan_id": "error_scan",
+                "user_id": user_id,
+                "system_info": get_real_system_info(),
+                "threats_detected": 0,
+                "scan_status": "error",
+                "created_at": datetime.now(ist).isoformat(),
+                "error": str(e)
+            }
+        }
+        
+        return res.json(fallback_response)
 
 def handle_start_scan(user_id, scan_type, res):
     """Handle scan start request for Appwrite"""
