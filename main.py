@@ -444,84 +444,79 @@ async def dashboard_alerts(current_user: dict = Depends(get_current_user)):
         return alerts
 
 # Real scan ingestion: runs agent.py's scan functions directly
+
 @app.post("/api/scan/start")
 async def start_manual_scan(background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
-    """Directly run a real system scan using agent.py's scan_real_processes, etc."""
+    """Perform a real local system scan and save results—now with full error handling."""
     try:
         suspicious_processes = scan_real_processes()
         network_threats = scan_real_network_connections()
         risky_ports = scan_real_open_ports()
         system_info = get_real_system_info()
+
         total_threats = len(suspicious_processes) + len(network_threats) + len(risky_ports)
         scan_id = f"scan_{int(time.time())}_{random.randint(1000, 9999)}"
-
+        
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                """
+            cursor.execute("""
                 INSERT INTO system_scans (scan_id, user_id, system_info, threats_detected, scan_status, expires_at)
                 VALUES (?, ?, ?, ?, ?, ?)
-                """, (
-                    scan_id,
-                    current_user["id"],
-                    json.dumps(system_info),
-                    total_threats,
-                    "completed",
-                    (datetime.now(IST) + timedelta(hours=2)).isoformat()
-                )
-            )
+            """, (
+                scan_id,
+                current_user["id"],
+                json.dumps(system_info),
+                total_threats,
+                "completed",
+                (datetime.now(IST) + timedelta(hours=2)).isoformat()
+            ))
 
             for process in suspicious_processes:
-                cursor.execute(
-                    """
+                cursor.execute("""
                     INSERT INTO suspicious_processes (scan_id, pid, name, cpu_percent, memory_percent, threat_level, threat_reasons, exe_path, cmdline, username)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        scan_id,
-                        process["pid"],
-                        process["name"],
-                        process["cpu_percent"],
-                        process["memory_percent"],
-                        process["threat_level"],
-                        json.dumps(process["threat_reasons"]),
-                        process["exe_path"],
-                        " ".join(process.get("cmdline", [])),
-                        process["username"]
-                    )
-                )
+                """, (
+                    scan_id,
+                    process["pid"],
+                    process["name"],
+                    process["cpu_percent"],
+                    process["memory_percent"],
+                    process["threat_level"],
+                    json.dumps(process["threat_reasons"]),
+                    process["exe_path"],
+                    " ".join(process.get("cmdline", [])),
+                    process["username"]
+                ))
 
             for net in network_threats:
-                cursor.execute(
-                    """
+                cursor.execute("""
                     INSERT INTO network_connections (scan_id, local_ip, local_port, remote_ip, remote_port, status, pid, process_name, threat_level, activity_description)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        scan_id,
-                        net["local_ip"],
-                        net["local_port"],
-                        net["remote_ip"],
-                        net["remote_port"],
-                        net["status"],
-                        net["pid"],
-                        net["process_name"],
-                        net["threat_level"],
-                        net["activity_description"]
-                    )
-                )
+                """, (
+                    scan_id,
+                    net["local_ip"],
+                    net["local_port"],
+                    net["remote_ip"],
+                    net["remote_port"],
+                    net["status"],
+                    net["pid"],
+                    net["process_name"],
+                    net["threat_level"],
+                    net["activity_description"]
+                ))
 
             for port in risky_ports:
-                cursor.execute(
-                    """
+                cursor.execute("""
                     INSERT INTO risky_ports (scan_id, port, service, threat_level, reason)
                     VALUES (?, ?, ?, ?, ?)
-                    """, (
-                        scan_id,
-                        port["port"],
-                        port["service"],
-                        port["threat_level"],
-                        port["reason"]
-                    )
-                )
+                """, (
+                    scan_id,
+                    port["port"],
+                    port["service"],
+                    port["threat_level"],
+                    port["reason"]
+                ))
+
             conn.commit()
 
         await manager.broadcast(json.dumps({
@@ -534,17 +529,15 @@ async def start_manual_scan(background_tasks: BackgroundTasks, current_user: dic
             }
         }))
 
-        if background_tasks:
-            high_crit_processes = [p for p in suspicious_processes if p["threat_level"] in ("high", "critical")]
-            high_crit_networks = [n for n in network_threats if n["threat_level"] in ("high", "critical")]
-            high_crit_ports = [r for r in risky_ports if r["threat_level"] in ("high", "critical")]
-            if high_crit_processes or high_crit_networks or high_crit_ports:
-                subject = f"CyberNova Alert: {total_threats} threats detected!"
-                body = "High/critical threats detected:\n"
-                body += "Processes: " + ", ".join([p["name"] for p in high_crit_processes]) + "\n"
-                body += "Network: " + ", ".join([n["activity_description"] for n in high_crit_networks]) + "\n"
-                body += "Ports: " + ", ".join([str(p["port"]) for p in high_crit_ports]) + "\n"
-                background_tasks.add_task(send_email, current_user["email"], subject, body)
+        if background_tasks and (suspicious_processes or network_threats or risky_ports):
+            subject, body = build_threat_summary_email(
+                current_user["full_name"],
+                scan_id,
+                [p for p in suspicious_processes if p["threat_level"] in ("high", "critical")],
+                [n for n in network_threats if n["threat_level"] in ("high", "critical")],
+                [r for r in risky_ports if r["threat_level"] in ("high", "critical")]
+            )
+            background_tasks.add_task(send_email, current_user["email"], subject, body)
 
         return {
             "status": "success",
@@ -556,7 +549,18 @@ async def start_manual_scan(background_tasks: BackgroundTasks, current_user: dic
             "risky_ports": risky_ports
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Scan failed: {str(e)}")
+        # Log full traceback for debugging
+        traceback.print_exc()
+        # Return structured error details to frontend
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "Scan failed",
+                "error": str(e),
+                "traceback": traceback.format_exc()
+            }
+        )
+
 
 @app.get("/api/scan/latest")
 async def get_latest_scan(current_user: dict = Depends(get_current_user)):
