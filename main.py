@@ -1481,6 +1481,8 @@ async def health():
     }
 
 # Fixed Appwrite integration functions
+# Replace the existing Appwrite functions with these corrected versions:
+
 async def create_user_in_appwrite(email: str, password: str, name: str) -> dict:
     """Create user in Appwrite - fixed for proper API usage"""
     try:
@@ -1506,8 +1508,11 @@ async def create_user_in_appwrite(email: str, password: str, name: str) -> dict:
 async def get_appwrite_users():
     """Get users from Appwrite - fixed for proper API usage"""
     try:
-        # Use proper list method without request body
-        users_list = users_service.list()
+        # Use proper list method without any parameters that might cause request body issues
+        users_list = users_service.list(
+            queries=[],  # Empty queries array
+            search=''    # Empty search string
+        )
         return {"success": True, "users": users_list}
     
     except AppwriteException as e:
@@ -1516,7 +1521,6 @@ async def get_appwrite_users():
     except Exception as e:
         print(f"General error listing users: {e}")
         return {"success": False, "error": str(e)}
-
 # Enhanced threat analytics endpoint
 @app.get("/api/threats/analytics")
 async def threat_analytics(current_user: dict = Depends(get_current_user)):
