@@ -1588,10 +1588,7 @@ async def get_appwrite_users():
     """Get users from Appwrite - fixed for proper API usage"""
     try:
         # Use proper list method without any parameters that might cause request body issues
-        users_list = users_service.list(
-            queries=[],  # Empty queries array
-            search=''    # Empty search string
-        )
+        users_list = users_service.list()
         return {"success": True, "users": users_list}
     
     except AppwriteException as e:
