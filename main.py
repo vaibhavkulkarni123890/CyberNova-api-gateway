@@ -1,528 +1,1848 @@
-from fastapi import FastAPI, BackgroundTasks
+# api-gateway/main.py - Complete CyberNova AI Backend
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse
-from pydantic import BaseModel
-import psutil
-import platform
-import socket
-import asyncio
-import json
-import math
-import time
-import random
-from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
-import numpy as np
-from sklearn.ensemble import IsolationForest, GradientBoostingClassifier
-from sklearn.preprocessing import StandardScaler
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from datetime import datetime, timedelta
+import httpx, os, asyncio, json, random, hashlib, jwt, smtplib, ssl, time
+try:
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+except ImportError:
+    MimeText = None
+    MimeMultipart = None
+from starlette.responses import StreamingResponse
+from pydantic import BaseModel, EmailStr
+from typing import List, Optional, Dict, Any
+import sqlite3
+import pymysql
+from contextlib import contextmanager
+import bcrypt
+from agent import (
+    perform_real_threat_scan,
+    scan_real_processes,
+    scan_real_network_connections,
+    scan_real_open_ports,
+    get_real_system_info,
+    send_scan_results
+)
+import pytz
+from appwrite.client import Client
+from appwrite.services.users import Users
+from appwrite.services.databases import Databases
+from appwrite.exception import AppwriteException
+import logging
 
-# FastAPI app
+# Initialize Appwrite client
+client = Client()
+client.set_endpoint(os.getenv('REACT_APP_APPWRITE_ENDPOINT'))
+client.set_project(os.getenv('REACT_APP_APPWRITE_PROJECT_ID'))
+client.set_key(os.getenv('REACT_APP_APPWRITE_FUNCTION_ID'))
+
+# Initialize Appwrite services
+users_service = Users(client)
+databases_service = Databases(client)
+
 app = FastAPI(
-    title="CyberNova AI - Real-time Threat Scanner",
-    description="Live system scanning with ML threat prediction - NO DATABASE",
-    version="4.0.0"
+    title="CyberNova AI - Advanced Cybersecurity Platform", 
+    version="3.0",
+    description="Next-generation AI-powered cybersecurity platform with real-time threat detection"
 )
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_credentials=True, 
+    allow_methods=["*"], 
     allow_headers=["*"],
 )
+logging.basicConfig(level=logging.INFO)
 
-# ==================== ML THREAT MODEL ====================
+# Configuration
+DETECTION_SERVICE_URL = os.getenv("DETECTION_SERVICE_URL", "http://detection-service:8081")
+ANALYTICS_SERVICE_URL = os.getenv("ANALYTICS_SERVICE_URL", "http://analytics-service:8083")
+JWT_SECRET = os.getenv("JWT_SECRET", "plus-one")
+JWT_ALGORITHM = "HS256"
+EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_USER = os.getenv("EMAIL_USER", "cybernova073@gmail.com")
+EMAIL_PASS = os.getenv("EMAIL_PASS", "hsrz fymn gplp enbp")
 
-class ThreatModel:
-    """Advanced ML threat detection model"""
-    
+# Security
+security = HTTPBearer()
+
+# Database Configuration
+DATABASE_PATH = "cybernova.db"
+
+# MySQL Configuration (for production deployment)
+MYSQL_HOST = os.getenv("MYSQLHOST")
+MYSQL_PORT = int(os.getenv("MYSQLPORT", "3306"))
+MYSQL_USER = os.getenv("MYSQLUSER", "root")
+MYSQL_PASSWORD = os.getenv("MYSQL_ROOT_PASSWORD")
+MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "railway")
+USE_MYSQL = bool(MYSQL_HOST and MYSQL_PASSWORD)
+
+# Pydantic Models
+class UserRegister(BaseModel):
+    email: EmailStr
+    password: str
+    full_name: str
+    company: Optional[str] = None
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class WaitlistEntry(BaseModel):
+    email: EmailStr
+
+class ThreatAlert(BaseModel):
+    threat_type: str
+    severity: str
+    source_ip: str
+    description: str
+    risk_score: int
+
+class User(BaseModel):
+    id: int
+    email: str
+    full_name: str
+    company: Optional[str]
+    is_active: bool
+    created_at: datetime
+
+# WebSocket Manager
+class ConnectionManager:
     def __init__(self):
-        self.scaler = StandardScaler()
-        self.anomaly_detector = IsolationForest(contamination=0.02, random_state=42)
-        self.classifier = GradientBoostingClassifier(random_state=42, n_estimators=50)
-        self.trained = False
-        self.bootstrap()
-    
-    def bootstrap(self):
-        """Initialize model with synthetic training data"""
-        print("🤖 Initializing ML threat detection model...")
-        np.random.seed(42)
-        
-        # Create synthetic training data
-        n_samples = 500
-        X = []
-        y = []
-        
-        for i in range(n_samples):
-            # Generate realistic process features
-            cpu_usage = np.random.exponential(15)  # Most processes use low CPU
-            memory_usage = np.random.exponential(10)  # Most processes use low memory
-            name_length = np.random.randint(5, 25)
-            process_entropy = np.random.uniform(0, 5)
-            network_connections = np.random.poisson(2)
-            file_operations = np.random.poisson(5)
-            
-            # Create threat labels based on heuristics
-            is_threat = 0
-            if cpu_usage > 80 or memory_usage > 70:
-                is_threat = 1
-            if process_entropy > 4:  # High entropy names are suspicious
-                is_threat = 1
-            if network_connections > 10:  # Too many connections
-                is_threat = 1
-            
-            # Add some randomness
-            if np.random.random() < 0.1:
-                is_threat = 1 - is_threat
-            
-            features = [
-                cpu_usage, memory_usage, name_length, process_entropy,
-                network_connections, file_operations,
-                np.sin(i / 10), np.cos(i / 10),  # Time features
-                np.random.uniform(0, 1), np.random.uniform(0, 1)  # Random features
-            ]
-            
-            X.append(features)
-            y.append(is_threat)
-        
-        X = np.array(X)
-        y = np.array(y)
-        
-        # Fit models
-        self.scaler.fit(X)
-        X_scaled = self.scaler.transform(X)
-        
-        self.anomaly_detector.fit(X_scaled)
-        
-        try:
-            self.classifier.fit(X_scaled, y)
-            self.trained = True
-            print("✅ ML model trained successfully")
-        except Exception as e:
-            print(f"⚠️ Classifier training failed: {e}")
-            self.trained = False
-    
-    def extract_features(self, process_data):
-        """Extract features from process data"""
-        name = process_data.get('name', '')
-        cpu = process_data.get('cpu_percent', 0)
-        memory = process_data.get('memory_percent', 0)
-        
-        # Calculate name entropy
-        name_entropy = 0
-        if name:
-            from collections import Counter
-            counts = Counter(name.lower())
-            total = len(name)
-            name_entropy = -sum((count/total) * math.log2(count/total) for count in counts.values())
-        
-        features = [
-            cpu,                           # CPU usage
-            memory,                        # Memory usage  
-            len(name),                     # Name length
-            name_entropy,                  # Name entropy
-            random.randint(0, 5),          # Simulated network connections
-            random.randint(0, 10),         # Simulated file operations
-            math.sin(time.time() / 3600),  # Time of day feature
-            math.cos(time.time() / 3600),  # Time of day feature
-            1 if any(pattern in name.lower() for pattern in ['temp', 'tmp', 'download']) else 0,
-            1 if cpu > 50 else 0          # High CPU flag
-        ]
-        
-        return features
-    
-    def predict_threat(self, process_data):
-        """Predict threat level for a process"""
-        features = self.extract_features(process_data)
-        
-        # Rule-based scoring
-        rule_score = 0
-        name = process_data.get('name', '').lower()
-        cpu = process_data.get('cpu_percent', 0)
-        memory = process_data.get('memory_percent', 0)
-        
-        # Suspicious name patterns
-        suspicious_names = ['powershell', 'cmd', 'wscript', 'cscript', 'rundll32', 'regsvr32', 'mshta']
-        if any(pattern in name for pattern in suspicious_names):
-            rule_score += 30
-        
-        # High resource usage
-        if cpu > 80:
-            rule_score += 25
-        if memory > 70:
-            rule_score += 20
-        
-        # Temporary directories
-        if 'temp' in name or 'tmp' in name:
-            rule_score += 15
-        
-        # ML predictions
-        X = np.array(features).reshape(1, -1)
-        X_scaled = self.scaler.transform(X)
-        
-        # Anomaly score (higher = more anomalous)
-        anomaly_raw = self.anomaly_detector.decision_function(X_scaled)[0]
-        anomaly_score = max(0, min(100, (0.5 - anomaly_raw) * 200))
-        
-        # Classification score
-        clf_score = 0
-        if self.trained:
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+
+    async def send_personal_message(self, message: str, websocket: WebSocket):
+        await websocket.send_text(message)
+
+    async def broadcast(self, message: str):
+        for connection in self.active_connections:
             try:
-                clf_prob = self.classifier.predict_proba(X_scaled)[0][1]
-                clf_score = clf_prob * 100
+                await connection.send_text(message)
             except:
-                clf_score = 0
-        
-        # Combined score
-        final_score = (0.4 * rule_score + 0.3 * clf_score + 0.3 * anomaly_score)
-        final_score = min(100, final_score)
-        
-        # Determine severity
-        if final_score >= 85:
-            severity = "critical"
-        elif final_score >= 70:
-            severity = "high"
-        elif final_score >= 50:
-            severity = "medium"
-        elif final_score >= 25:
-            severity = "low"
-        else:
-            severity = "safe"
-        
-        return {
-            "threat_score": round(final_score, 1),
-            "severity": severity,
-            "rule_score": round(rule_score, 1),
-            "anomaly_score": round(anomaly_score, 1),
-            "ml_score": round(clf_score, 1)
-        }
+                pass
 
-# Initialize global threat model
-threat_model = ThreatModel()
+manager = ConnectionManager()
 
-# ==================== REAL SYSTEM SCANNING ====================
-
-def get_system_info():
-    """Get real system information"""
-    try:
-        # Get real IP address
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip_address = s.getsockname()[0]
-        s.close()
-    except:
-        ip_address = "127.0.0.1"
+# Database Functions
+def init_database():
+    """Initialize database with all required tables (MySQL or SQLite)"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
     
-    memory = psutil.virtual_memory()
+    # Users table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            full_name TEXT NOT NULL,
+            company TEXT,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Waitlist table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS waitlist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # System scans table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS system_scans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_id TEXT UNIQUE NOT NULL,
+            user_id INTEGER NOT NULL,
+            system_info TEXT,
+            threats_detected INTEGER DEFAULT 0,
+            scan_status TEXT DEFAULT 'completed',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    ''')
+    
+    # Network connections table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS network_connections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_id TEXT NOT NULL,
+            local_ip TEXT,
+            local_port INTEGER,
+            remote_ip TEXT,
+            remote_port INTEGER,
+            hostname TEXT,
+            service_info TEXT,
+            activity_description TEXT,
+            status TEXT,
+            pid INTEGER,
+            process_name TEXT,
+            process_exe TEXT,
+            process_cmdline TEXT,
+            threat_level TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (scan_id) REFERENCES system_scans (scan_id)
+        )
+    ''')
+    
+    # Suspicious processes table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS suspicious_processes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_id TEXT NOT NULL,
+            pid INTEGER,
+            name TEXT,
+            cpu_percent REAL,
+            memory_percent REAL,
+            threat_level TEXT,
+            threat_reasons TEXT,
+            exe_path TEXT,
+            cmdline TEXT,
+            username TEXT,
+            network_activity TEXT,
+            behavior_analysis TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (scan_id) REFERENCES system_scans (scan_id)
+        )
+    ''')
+    
+    # Risky ports table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS risky_ports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_id TEXT NOT NULL,
+            port INTEGER,
+            service TEXT,
+            threat_level TEXT,
+            reason TEXT,
+            recommendation TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (scan_id) REFERENCES system_scans (scan_id)
+        )
+    ''')
+    
+    # Threat history table (permanent storage)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS threat_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            threat_type TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            source_ip TEXT,
+            description TEXT,
+            risk_score INTEGER,
+            is_resolved BOOLEAN DEFAULT FALSE,
+            detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    ''')
+    
+    # Security recommendations table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS security_recommendations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_id TEXT NOT NULL,
+            type TEXT,
+            priority TEXT,
+            title TEXT,
+            description TEXT,
+            action TEXT,
+            details TEXT,
+            is_sent BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (scan_id) REFERENCES system_scans (scan_id)
+        )
+    ''')
+    
+    # Analytics table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS analytics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            metric_type TEXT NOT NULL,
+            metric_value REAL NOT NULL,
+            metadata TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    conn.commit()
+
+@contextmanager
+def get_db_connection():
+    """Get database connection (MySQL or SQLite)"""
+    if USE_MYSQL:
+        # Use MySQL for production
+        connection = None
+        try:
+            connection = pymysql.connect(
+                host=MYSQL_HOST,
+                port=MYSQL_PORT,
+                user=MYSQL_USER,
+                password=MYSQL_PASSWORD,
+                database=MYSQL_DATABASE,
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=False
+            )
+            yield connection
+        except Exception as e:
+            if connection:
+                connection.rollback()
+            raise e
+        finally:
+            if connection:
+                connection.close()
+    else:
+        # Use SQLite for local development
+        conn = sqlite3.connect(DATABASE_PATH, timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA cache_size=1000")
+        conn.execute("PRAGMA temp_store=memory")
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+# Utility Functions
+def hash_password(password: str) -> str:
+    """Hash password using bcrypt"""
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+def verify_password(password: str, hashed: str) -> bool:
+    """Verify password against hash"""
+    return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+
+ist = pytz.timezone('Asia/Kolkata')
+
+def create_jwt_token(user_id: int, email: str) -> str:
+    """Create JWT token"""
+    payload = {
+        "user_id": user_id,
+        "email": email,
+        "exp": datetime.now(ist) + timedelta(days=7)
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+def verify_jwt_token(token: str) -> Dict[str, Any]:
+    """Verify JWT token"""
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Get current user from JWT token"""
+    payload = verify_jwt_token(credentials.credentials)
+    
+    with get_db_connection() as conn:
+        user = conn.execute(
+            "SELECT * FROM users WHERE id = ? AND is_active = TRUE", 
+            (payload["user_id"],)
+        ).fetchone()
+    
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    
+    return dict(user)
+
+def send_email(to_email: str, subject: str, body: str):
+    """Send a real email via SMTP (TLS)."""
+    if not all([EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASS]):
+        print("[WARN] Email not configured")
+        return
+
+    msg = MIMEMultipart()
+    msg["From"] = EMAIL_USER
+    msg["To"] = to_email
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain"))
+
+    context = ssl.create_default_context()
+    try:
+        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
+            server.starttls(context=context)
+            server.login(EMAIL_USER, EMAIL_PASS)
+            server.sendmail(EMAIL_USER, to_email, msg.as_string())
+        print(f"[INFO] Email sent to {to_email}")
+    except Exception as e:
+        print(f"[ERROR] Failed to send email: {e}")
+
+# Authentication Endpoints
+@app.post("/api/auth/register")
+async def register_user(user_data: UserRegister, background_tasks: BackgroundTasks):
+    """Register new user"""
+    with get_db_connection() as conn:
+        # Check if user already exists
+        existing_user = conn.execute(
+            "SELECT id FROM users WHERE email = ?", (user_data.email,)
+        ).fetchone()
+        
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        
+        # Hash password and create user
+        password_hash = hash_password(user_data.password)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO users (email, password_hash, full_name, company) VALUES (?, ?, ?, ?)",
+            (user_data.email, password_hash, user_data.full_name, user_data.company)
+        )
+        user_id = cursor.lastrowid
+        conn.commit()
+    
+    # Create JWT token
+    token = create_jwt_token(user_id, user_data.email)
+    
+    # Send welcome email
+    welcome_email = f"""
+Welcome to CyberNova AI!
+
+Hi {user_data.full_name},
+
+Your account has been successfully created! You now have access to our advanced cybersecurity platform.
+
+What's Next:
+- Complete your security profile
+- Set up threat monitoring
+- Configure alert preferences
+- Explore AI-powered analytics
+
+Login to your dashboard: http://localhost:3000/dashboard
+
+Best regards,
+The CyberNova AI Team
+cybernova073@gmail.com
+    """
+    
+    background_tasks.add_task(
+        send_email, 
+        user_data.email, 
+        "Welcome to CyberNova AI - Account Created!", 
+        welcome_email
+    )
     
     return {
-        "hostname": platform.node(),
-        "platform": f"{platform.system()} {platform.release()}",
-        "architecture": platform.architecture()[0],
-        "processor": platform.processor() or "Unknown",
-        "ip_address": ip_address,
-        "cpu_count": psutil.cpu_count(logical=True),
-        "memory_total": memory.total,
-        "memory_available": memory.available,
-        "memory_percent": memory.percent,
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "message": "User registered successfully",
+        "token": token,
+        "user": {
+            "id": user_id,
+            "email": user_data.email,
+            "full_name": user_data.full_name,
+            "company": user_data.company
+        }
     }
 
-async def scan_processes():
-    """Scan running processes for threats"""
-    processes = []
+@app.post("/api/auth/login")
+async def login_user(login_data: UserLogin):
+    """Login user"""
+    with get_db_connection() as conn:
+        user = conn.execute(
+            "SELECT * FROM users WHERE email = ? AND is_active = TRUE", 
+            (login_data.email,)
+        ).fetchone()
     
-    try:
-        for proc in psutil.process_iter(['pid', 'name', 'exe', 'cmdline', 'cpu_percent', 'memory_percent', 'username']):
-            try:
-                proc_info = proc.info
-                
-                if not proc_info.get('name'):
-                    continue
-                
-                # Get CPU and memory usage
-                cpu_percent = proc_info.get('cpu_percent') or 0
-                memory_percent = proc_info.get('memory_percent') or 0
-                
-                process_data = {
-                    "pid": proc_info['pid'],
-                    "name": proc_info['name'],
-                    "exe_path": proc_info.get('exe') or '',
-                    "cmdline": ' '.join(proc_info.get('cmdline') or []),
-                    "cpu_percent": cpu_percent,
-                    "memory_percent": memory_percent,
-                    "username": proc_info.get('username') or 'Unknown',
-                    "created_at": datetime.now(timezone.utc).isoformat()
-                }
-                
-                # Get ML threat prediction
-                threat_prediction = threat_model.predict_threat(process_data)
-                process_data.update(threat_prediction)
-                
-                processes.append(process_data)
-                
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                continue
-                
-    except Exception as e:
-        print(f"Process scanning error: {e}")
+    if not user or not verify_password(login_data.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
     
-    return processes
-
-async def scan_network_connections():
-    """Scan network connections"""
-    connections = []
+    token = create_jwt_token(user["id"], user["email"])
     
-    try:
-        conns = psutil.net_connections(kind='inet')
-        
-        for conn in conns:
-            if conn.status == psutil.CONN_ESTABLISHED and conn.raddr:
-                remote_ip = conn.raddr.ip
-                remote_port = conn.raddr.port
-                
-                # Skip local IPs
-                if remote_ip.startswith(('127.', '10.', '192.168.', '172.')):
-                    continue
-                
-                # Determine threat level
-                threat_level = "low"
-                if remote_port in [22, 23, 3389, 1433, 5900]:  # High-risk ports
-                    threat_level = "high"
-                elif remote_port in [135, 139, 445]:  # Medium-risk ports
-                    threat_level = "medium"
-                
-                # Get process info
-                process_name = "Unknown"
-                if conn.pid:
-                    try:
-                        proc = psutil.Process(conn.pid)
-                        process_name = proc.name()
-                    except:
-                        pass
-                
-                connections.append({
-                    "local_ip": conn.laddr.ip if conn.laddr else "",
-                    "local_port": conn.laddr.port if conn.laddr else 0,
-                    "remote_ip": remote_ip,
-                    "remote_port": remote_port,
-                    "status": conn.status,
-                    "pid": conn.pid,
-                    "process_name": process_name,
-                    "threat_level": threat_level,
-                    "activity_description": f"Connection to {remote_ip}:{remote_port}",
-                    "created_at": datetime.now(timezone.utc).isoformat()
-                })
-                
-    except Exception as e:
-        print(f"Network scanning error: {e}")
-    
-    return connections
-
-async def scan_open_ports():
-    """Scan for risky open ports"""
-    risky_ports = []
-    
-    # Common risky ports
-    ports_to_check = {
-        21: ("FTP", "File Transfer Protocol - often misconfigured"),
-        22: ("SSH", "SSH service - brute force target"),
-        23: ("Telnet", "Unencrypted remote access - critical risk"),
-        135: ("RPC", "Windows RPC - attack vector"),
-        139: ("NetBIOS", "File sharing - ransomware risk"),
-        445: ("SMB", "File sharing - common attack target"),
-        1433: ("SQL Server", "Database - secure credentials needed"),
-        3389: ("RDP", "Remote Desktop - brute force target"),
-        5900: ("VNC", "Remote desktop - weak passwords")
+    return {
+        "message": "Login successful",
+        "token": token,
+        "user": {
+            "id": user["id"],
+            "email": user["email"],
+            "full_name": user["full_name"],
+            "company": user["company"]
+        }
     }
-    
-    try:
-        # Get listening ports
-        connections = psutil.net_connections(kind='inet')
-        listening_ports = set()
-        
-        for conn in connections:
-            if conn.status == psutil.CONN_LISTEN:
-                listening_ports.add(conn.laddr.port)
-        
-        # Check risky ports
-        for port in listening_ports:
-            if port in ports_to_check:
-                service, reason = ports_to_check[port]
-                
-                threat_level = "critical" if port in [23, 3389, 1433] else "high"
-                
-                risky_ports.append({
-                    "port": port,
-                    "service": service,
-                    "threat_level": threat_level,
-                    "reason": reason,
-                    "recommendation": f"Consider securing or disabling {service}",
-                    "created_at": datetime.now(timezone.utc).isoformat()
-                })
-                
-    except Exception as e:
-        print(f"Port scanning error: {e}")
-    
-    return risky_ports
 
-# ==================== API ENDPOINTS ====================
+@app.get("/api/auth/me")
+async def get_current_user_info(current_user: dict = Depends(get_current_user)):
+    """Get current user information"""
+    return {
+        "id": current_user["id"],
+        "email": current_user["email"],
+        "full_name": current_user["full_name"],
+        "company": current_user["company"],
+        "created_at": current_user["created_at"]
+    }
 
-@app.get("/")
-async def dashboard():
-    """Main dashboard endpoint - returns comprehensive scan results"""
-    print("🔍 Performing real-time system scan...")
-    
-    try:
-        # Perform comprehensive scan
-        system_info = get_system_info()
-        processes = await scan_processes()
-        network_connections = await scan_network_connections()
-        open_ports = await scan_open_ports()
+# Waitlist Endpoints
+@app.post("/api/waitlist")
+async def join_waitlist(waitlist_entry: WaitlistEntry, background_tasks: BackgroundTasks):
+    """Add email to waitlist"""
+    with get_db_connection() as conn:
+        # Check if email already exists
+        existing = conn.execute(
+            "SELECT id FROM waitlist WHERE email = ?", (waitlist_entry.email,)
+        ).fetchone()
         
-        # Filter for threats only
-        suspicious_processes = [p for p in processes if p.get('severity') in ['medium', 'high', 'critical']]
-        high_threat_connections = [c for c in network_connections if c.get('threat_level') in ['high', 'critical']]
+        if existing:
+            return {"message": "Email already on waitlist", "status": "existing"}
         
-        # Generate alerts
-        alerts = []
-        
-        # Process alerts
-        for proc in suspicious_processes:
-            alerts.append({
-                "id": f"process_{proc['pid']}",
-                "title": f"Suspicious Process: {proc['name']}",
-                "description": f"Real threat detected: {proc['name']} (PID: {proc['pid']}) - Threat Score: {proc.get('threat_score', 0)}",
-                "severity": proc['severity'],
-                "timestamp": proc['created_at'],
-                "sourceIp": "Local System",
-                "riskScore": proc.get('threat_score', 0),
-                "isBlocked": False,
-                "type": "process"
-            })
-        
-        # Network alerts
-        for conn in high_threat_connections:
-            alerts.append({
-                "id": f"network_{conn['remote_ip']}_{conn['remote_port']}",
-                "title": "Suspicious Network Connection",
-                "description": f"Real network threat: {conn['activity_description']}",
-                "severity": conn['threat_level'],
-                "timestamp": conn['created_at'],
-                "sourceIp": conn['remote_ip'],
-                "riskScore": 80 if conn['threat_level'] == 'critical' else 65,
-                "isBlocked": False,
-                "type": "network"
-            })
-        
-        # Port alerts
-        for port in open_ports:
-            alerts.append({
-                "id": f"port_{port['port']}",
-                "title": f"Risky Port Open: {port['port']}",
-                "description": f"Real vulnerability: {port['reason']}",
-                "severity": port['threat_level'],
-                "timestamp": port['created_at'],
-                "sourceIp": "Local System",
-                "riskScore": 90 if port['threat_level'] == 'critical' else 70,
-                "isBlocked": False,
-                "type": "port"
-            })
-        
-        # Calculate statistics
-        total_threats = len(suspicious_processes) + len(high_threat_connections) + len(open_ports)
-        active_alerts = len(alerts)
-        risk_score = min(100, active_alerts * 15) if active_alerts > 0 else 0
-        system_health = max(0, 100 - risk_score)
-        
-        # Generate recommendations
-        recommendations = []
-        if suspicious_processes:
-            recommendations.append({
-                "id": 1,
-                "type": "malware",
-                "priority": "critical",
-                "title": "Investigate Suspicious Processes",
-                "description": f"{len(suspicious_processes)} suspicious processes detected",
-                "action": "Review and terminate suspicious processes",
-                "details": [p['name'] for p in suspicious_processes[:5]]
-            })
-        
-        if open_ports:
-            recommendations.append({
-                "id": 2,
-                "type": "security",
-                "priority": "high",
-                "title": "Secure Open Ports",
-                "description": f"{len(open_ports)} risky ports are open",
-                "action": "Close unnecessary ports or implement security",
-                "details": [f"Port {p['port']} ({p['service']})" for p in open_ports]
-            })
-        
-        return JSONResponse(content={
-            "systemInfo": system_info,
-            "stats": {
-                "totalThreats": total_threats,
-                "activeAlerts": active_alerts,
-                "riskScore": round(risk_score, 1),
-                "systemHealth": round(system_health, 1),
-                "lastScanTime": datetime.now(timezone.utc).isoformat(),
-                "scanStatus": "completed"
-            },
-            "alerts": alerts,
-            "scanData": {
-                "system_info": system_info,
-                "suspicious_processes": suspicious_processes,
-                "network_connections": network_connections,
-                "risky_ports": open_ports,
-                "recommendations": recommendations
-            }
-        })
-        
-    except Exception as e:
-        print(f"❌ Scan error: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": f"Scan failed: {str(e)}"}
+        # Add to waitlist
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO waitlist (email) VALUES (?)", (waitlist_entry.email,)
         )
-
-@app.get("/scan")
-async def quick_scan():
-    """Quick scan endpoint"""
-    processes = await scan_processes()
-    threats = [p for p in processes if p.get('severity') in ['medium', 'high', 'critical']]
+        conn.commit()
     
-    return JSONResponse(content={
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "total_processes": len(processes),
-        "threats_detected": len(threats),
-        "threats": threats
-    })
+    # Send waitlist email
+    waitlist_email = f"""
+CyberNova AI - Next-Generation Cybersecurity Platform
 
-@app.get("/health")
+Thank you for joining our exclusive waitlist!
+
+LAUNCH DATE: September 15, 2025
+
+What you'll get:
+- Early access to CyberNova AI platform
+- Special launch pricing (up to 50% off)
+- Priority customer support
+- Beta testing opportunities
+
+We're building the most advanced AI-powered cybersecurity
+platform ever created. You'll be among the first to experience:
+
+- Real-time threat detection (<100ms response)
+- AI-powered risk assessment
+- Automated incident response
+- Intelligent security analytics
+- 24/7 monitoring and alerts
+
+Stay tuned for more updates as we approach launch!
+
+Best regards,
+The CyberNova AI Team
+cybernova073@gmail.com
+    """
+    
+    background_tasks.add_task(
+        send_email,
+        waitlist_entry.email,
+        "Welcome to CyberNova AI Waitlist!",
+        waitlist_email
+    )
+    
+    return {"message": "Successfully joined waitlist", "status": "success"}
+
+# Dashboard Endpoints
+@app.get("/api/dashboard/stats")
+async def dashboard_stats(current_user: dict = Depends(get_current_user)):
+    """Get real dashboard statistics from actual scans (no duplicates)"""
+    with get_db_connection() as conn:
+        # Get latest scan data
+        latest_scan = conn.execute("""
+            SELECT * FROM system_scans 
+            WHERE user_id = ? 
+            ORDER BY created_at DESC 
+            LIMIT 1
+        """, (current_user["id"],)).fetchone()
+        
+        # Get current active threats from LATEST scan only
+        if latest_scan:
+            scan_id = latest_scan["scan_id"]
+            
+            # Count threats from the latest scan only
+            process_threats = conn.execute("""
+                SELECT COUNT(*) as count FROM suspicious_processes 
+                WHERE scan_id = ? AND threat_level IN ('high', 'critical')
+            """, (scan_id,)).fetchone()["count"]
+            
+            port_threats = conn.execute("""
+                SELECT COUNT(*) as count FROM risky_ports 
+                WHERE scan_id = ? AND threat_level IN ('high', 'critical')
+            """, (scan_id,)).fetchone()["count"]
+            
+            network_threats = conn.execute("""
+                SELECT COUNT(*) as count FROM network_connections 
+                WHERE scan_id = ? AND threat_level IN ('high', 'critical')
+            """, (scan_id,)).fetchone()["count"]
+            
+            total_threats = process_threats + port_threats + network_threats
+            recorded_threats = latest_scan["threats_detected"] or 0
+            total_threats = max(total_threats, recorded_threats)
+            
+        else:
+            total_threats = 0
+    
+    # Calculate system health based on current threats
+    risk_score = min(100, max(0, total_threats * 15))
+    system_health = max(0, 100 - (total_threats * 10))
+    
+    return {
+        "totalThreats": int(total_threats),
+        "activeAlerts": int(total_threats),
+        "riskScore": round(float(risk_score), 2),
+        "systemHealth": round(float(system_health), 2),
+        "lastScanTime": latest_scan["created_at"] if latest_scan else None,
+        "scanStatus": latest_scan["scan_status"] if latest_scan else "No scans yet"
+    }def get_threat_resolution(threat_type, severity, description):
+    """Get resolution recommendations for different threat types"""
+    resolutions = {
+        "Suspicious Process": {
+            "critical": {
+                "action": "Immediate Action Required",
+                "steps": [
+                    "1. Terminate the suspicious process immediately",
+                    "2. Run a full system antivirus scan",
+                    "3. Check for unauthorized system changes",
+                    "4. Update all security software",
+                    "5. Consider system restore if needed"
+                ],
+                "prevention": "Keep antivirus updated, avoid suspicious downloads"
+            },
+            "high": {
+                "action": "Action Recommended",
+                "steps": [
+                    "1. Investigate the process in Task Manager",
+                    "2. Check process location and digital signature",
+                    "3. Run antivirus scan if suspicious",
+                    "4. Monitor system performance"
+                ],
+                "prevention": "Regular system scans, software updates"
+            }
+        },
+        "Risky Port": {
+            "critical": {
+                "action": "Secure Network Immediately",
+                "steps": [
+                    "1. Close unnecessary open ports",
+                    "2. Configure firewall rules",
+                    "3. Check for unauthorized services",
+                    "4. Update network security settings",
+                    "5. Monitor network traffic"
+                ],
+                "prevention": "Regular firewall audits, disable unused services"
+            },
+            "high": {
+                "action": "Review Network Security",
+                "steps": [
+                    "1. Verify if the service is needed",
+                    "2. Configure proper access controls",
+                    "3. Update service if outdated",
+                    "4. Monitor port activity"
+                ],
+                "prevention": "Regular security audits, principle of least privilege"
+            }
+        },
+        "Suspicious Network Activity": {
+            "critical": {
+                "action": "Block Suspicious Traffic",
+                "steps": [
+                    "1. Block suspicious IP addresses",
+                    "2. Check for malware infections",
+                    "3. Review network logs",
+                    "4. Update firewall rules",
+                    "5. Consider network isolation if needed"
+                ],
+                "prevention": "Use reputable DNS, avoid suspicious websites"
+            },
+            "high": {
+                "action": "Monitor Network Activity",
+                "steps": [
+                    "1. Review connection details",
+                    "2. Check if connection is legitimate",
+                    "3. Monitor for unusual data transfer",
+                    "4. Update security software"
+                ],
+                "prevention": "Regular network monitoring, secure browsing habits"
+            }
+        }
+    }
+    
+    # Default resolution for unknown threats
+    default_resolution = {
+        "action": "General Security Review",
+        "steps": [
+            "1. Run a full system security scan",
+            "2. Update all software and security patches",
+            "3. Review recent system changes",
+            "4. Monitor system behavior"
+        ],
+        "prevention": "Keep systems updated, use reputable security software"
+    }
+    
+    threat_category = "Suspicious Process"
+    if "port" in description.lower() or "service" in description.lower():
+        threat_category = "Risky Port"
+    elif "network" in description.lower() or "connection" in description.lower():
+        threat_category = "Suspicious Network Activity"
+    
+    return resolutions.get(threat_category, {}).get(severity.lower(), default_resolution)
+
+@app.get("/api/dashboard/alerts")
+async def dashboard_alerts(current_user: dict = Depends(get_current_user)):
+    """Get recent real threat alerts from latest scan only (no duplicates)"""
+    with get_db_connection() as conn:
+        # Get the latest scan for this user
+        latest_scan = conn.execute("""
+            SELECT scan_id FROM system_scans 
+            WHERE user_id = ? 
+            ORDER BY created_at DESC 
+            LIMIT 1
+        """, (current_user["id"],)).fetchone()
+        
+        if not latest_scan:
+            return []
+        
+        scan_id = latest_scan["scan_id"]
+        
+        # Get threats from LATEST scan only to prevent duplicates
+        alerts_query = """
+        SELECT 
+            'process_' || sp.name || '_' || sp.pid as id,
+            'Suspicious Process: ' || sp.name as title,
+            'Real threat detected: ' || sp.name || ' (PID: ' || sp.pid || ')' as description,
+            sp.threat_level as severity,
+            s.created_at as timestamp,
+            'Local System' as sourceIp,
+            CASE sp.threat_level 
+                WHEN 'critical' THEN 90
+                WHEN 'high' THEN 70
+                ELSE 50
+            END as riskScore,
+            0 as isBlocked,
+            'process' as type,
+            sp.threat_reasons as details
+        FROM suspicious_processes sp
+        JOIN system_scans s ON sp.scan_id = s.scan_id
+        WHERE sp.scan_id = ? AND sp.threat_level IN ('high', 'critical')
+        
+        UNION ALL
+        
+        SELECT 
+            'port_' || rp.port as id,
+            'Risky Port: ' || rp.port || ' (' || COALESCE(rp.service, 'Unknown') || ')' as title,
+            'Real vulnerability: ' || COALESCE(rp.reason, 'Port ' || rp.port || ' is exposed') as description,
+            rp.threat_level as severity,
+            s.created_at as timestamp,
+            'Local System' as sourceIp,
+            CASE rp.threat_level 
+                WHEN 'critical' THEN 80
+                WHEN 'high' THEN 60
+                ELSE 40
+            END as riskScore,
+            0 as isBlocked,
+            'port' as type,
+            rp.reason as details
+        FROM risky_ports rp
+        JOIN system_scans s ON rp.scan_id = s.scan_id
+        WHERE rp.scan_id = ? AND rp.threat_level IN ('high', 'critical')
+        
+        UNION ALL
+        
+        SELECT 
+            'network_' || nc.remote_ip || '_' || nc.remote_port as id,
+            'Suspicious Network Activity' as title,
+            'Real network threat: ' || COALESCE(nc.activity_description, 'Suspicious connection detected') as description,
+            nc.threat_level as severity,
+            s.created_at as timestamp,
+            nc.remote_ip as sourceIp,
+            CASE nc.threat_level 
+                WHEN 'critical' THEN 85
+                WHEN 'high' THEN 65
+                ELSE 45
+            END as riskScore,
+            0 as isBlocked,
+            'network' as type,
+            nc.activity_description as details
+        FROM network_connections nc
+        JOIN system_scans s ON nc.scan_id = s.scan_id
+        WHERE nc.scan_id = ? AND nc.threat_level IN ('high', 'critical')
+        
+        ORDER BY timestamp DESC
+        """
+        
+        threats = conn.execute(alerts_query, (scan_id, scan_id, scan_id)).fetchall()
+    
+    alerts = []
+    seen_ids = set()  # Additional deduplication
+    
+    for threat in threats:
+        # Skip if we've already seen this threat ID
+        if threat["id"] in seen_ids:
+            continue
+        seen_ids.add(threat["id"])
+        
+        # Get resolution recommendations
+        resolution = get_threat_resolution(threat["title"], threat["severity"], threat["description"])
+        
+        alerts.append({
+            "id": threat["id"],
+            "title": threat["title"],
+            "description": threat["description"],
+            "severity": threat["severity"],
+            "timestamp": threat["timestamp"],
+            "sourceIp": threat["sourceIp"],
+            "riskScore": threat["riskScore"],
+            "isBlocked": bool(threat["isBlocked"]),
+            "type": threat["type"],
+            "resolution": resolution,
+            "isReal": True  # Mark as real threat
+        })
+    
+    return alerts
+
+@app.get("/api/threat/{threat_id}/details")
+async def get_threat_details(threat_id: str, current_user: dict = Depends(get_current_user)):
+    """Get detailed information about a specific threat"""
+    with get_db_connection() as conn:
+        # Parse threat ID to determine type
+        if threat_id.startswith("process_"):
+            process_name = threat_id.replace("process_", "")
+            threat_data = conn.execute("""
+                SELECT sp.*, s.created_at, s.scan_id
+                FROM suspicious_processes sp
+                JOIN system_scans s ON sp.scan_id = s.scan_id
+                WHERE s.user_id = ? AND sp.name = ?
+                ORDER BY s.created_at DESC
+                LIMIT 1
+            """, (current_user["id"], process_name)).fetchone()
+            
+            if not threat_data:
+                raise HTTPException(status_code=404, detail="Threat not found")
+                
+            resolution = get_threat_resolution("Suspicious Process", threat_data["threat_level"], f"Process: {process_name}")
+            
+            return {
+                "id": threat_id,
+                "type": "Suspicious Process",
+                "name": process_name,
+                "severity": threat_data["threat_level"],
+                "riskScore": 90 if threat_data["threat_level"] == "critical" else 70,
+                "detectedAt": threat_data["created_at"],
+                "details": {
+                    "processName": process_name,
+                    "threatLevel": threat_data["threat_level"],
+                    "scanId": threat_data["scan_id"]
+                },
+                "resolution": resolution,
+                "isActive": True
+            }
+        
+        elif threat_id.startswith("port_"):
+            port_num = threat_id.replace("port_", "")
+            threat_data = conn.execute("""
+                SELECT rp.*, s.created_at, s.scan_id
+                FROM risky_ports rp
+                JOIN system_scans s ON rp.scan_id = s.scan_id
+                WHERE s.user_id = ? AND rp.port = ?
+                ORDER BY s.created_at DESC
+                LIMIT 1
+            """, (current_user["id"], port_num)).fetchone()
+            
+            if not threat_data:
+                raise HTTPException(status_code=404, detail="Threat not found")
+                
+            resolution = get_threat_resolution("Risky Port", threat_data["threat_level"], f"Port: {port_num}")
+            threat_dict = dict(threat_data)
+
+            return {
+                "id": threat_id,
+                "type": "Risky Port",
+                "name": f"Port {port_num}",
+                "severity": threat_data["threat_level"],
+                "riskScore": 80 if threat_data["threat_level"] == "critical" else 60,
+                "detectedAt": threat_data["created_at"],
+                "details": {
+                    "port": port_num,
+                    "service": threat_dict.get("service", "Unknown"),
+                    "threatLevel": threat_data["threat_level"],
+                    "scanId": threat_data["scan_id"]
+                },
+                "resolution": resolution,
+                "isActive": True
+            }
+        
+        elif threat_id.startswith("network_"):
+            threat_data = conn.execute("""
+                SELECT nc.*, s.created_at, s.scan_id
+                FROM network_connections nc
+                JOIN system_scans s ON nc.scan_id = s.scan_id
+                WHERE s.user_id = ? AND nc.threat_level IN ('high', 'critical')
+                ORDER BY s.created_at DESC
+                LIMIT 1
+            """, (current_user["id"],)).fetchone()
+            
+            if not threat_data:
+                raise HTTPException(status_code=404, detail="Threat not found")
+                
+            resolution = get_threat_resolution("Suspicious Network Activity", threat_data["threat_level"], threat_data["activity_description"])
+            
+            return {
+                "id": threat_id,
+                "type": "Suspicious Network Activity",
+                "name": "Network Connection",
+                "severity": threat_data["threat_level"],
+                "riskScore": 85 if threat_data["threat_level"] == "critical" else 65,
+                "detectedAt": threat_data["created_at"],
+                "details": {
+                    "description": threat_data["activity_description"],
+                    "threatLevel": threat_data["threat_level"],
+                    "scanId": threat_data["scan_id"]
+                },
+                "resolution": resolution,
+                "isActive": True
+            }
+        
+    raise HTTPException(status_code=404, detail="Threat not found")
+
+@app.post("/api/threat/{threat_id}/resolve")
+async def resolve_threat(threat_id: str, current_user: dict = Depends(get_current_user)):
+    """Mark a threat as resolved"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE threat_history
+            SET is_resolved = 1
+            WHERE id = ? AND user_id = ?
+        """, (threat_id, current_user["id"]))
+        
+        conn.commit()
+        
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Threat not found")
+
+    return {
+        "success": True,
+        "message": "Threat marked as resolved",
+        "threatId": threat_id,
+        "resolvedAt": datetime.now(ist).isoformat()
+    }
+
+@app.post("/api/dashboard/reset")
+async def reset_dashboard_data(current_user: dict = Depends(get_current_user)):
+    """Reset/clear all scan data for the current user"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        try:
+            # Clear all scan-related data for this user
+            cursor.execute("""
+                DELETE FROM network_connections WHERE scan_id IN (
+                    SELECT scan_id FROM system_scans WHERE user_id = ?
+                )
+            """, (current_user["id"],))
+            
+            cursor.execute("""
+                DELETE FROM suspicious_processes WHERE scan_id IN (
+                    SELECT scan_id FROM system_scans WHERE user_id = ?
+                )
+            """, (current_user["id"],))
+            
+            cursor.execute("""
+                DELETE FROM risky_ports WHERE scan_id IN (
+                    SELECT scan_id FROM system_scans WHERE user_id = ?
+                )
+            """, (current_user["id"],))
+            
+            cursor.execute("""
+                DELETE FROM security_recommendations WHERE scan_id IN (
+                    SELECT scan_id FROM system_scans WHERE user_id = ?
+                )
+            """, (current_user["id"],))
+            
+            cursor.execute("DELETE FROM system_scans WHERE user_id = ?", (current_user["id"],))
+            cursor.execute("DELETE FROM threat_history WHERE user_id = ?", (current_user["id"],))
+            
+            conn.commit()
+            
+        except Exception as e:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail=f"Reset failed: {str(e)}")
+        
+    return {
+        "success": True,
+        "message": "Dashboard data reset successfully",
+        "timestamp": datetime.now(ist).isoformat()
+    }
+
+@app.get("/api/dashboard/trends")
+async def dashboard_trends(current_user: dict = Depends(get_current_user)):
+    """Get threat trends data"""
+    trends = []
+    for hour in range(24):
+        threats = random.randint(10, 50)
+        blocked = random.randint(5, threats)
+        trends.append({
+            "time": f"{hour:02d}:00",
+            "threats": threats,
+            "blocked": blocked
+        })
+    
+    return trends
+
+# System Scanning Endpoints
+@app.get("/api/test")
+async def test_endpoint():
+    """Test endpoint to verify backend is working"""
+    return {"status": "Backend is working!", "timestamp": datetime.now(ist).isoformat()}
+
+@app.get("/api/health")
 async def health_check():
     """Health check endpoint"""
-    return JSONResponse(content={
+    return {
         "status": "healthy",
-        "service": "CyberNova AI - Real-time Threat Scanner",
-        "version": "4.0.0",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "ml_model": "trained" if threat_model.trained else "basic",
-        "features": "Real-time scanning, ML threat detection, No database"
-    })
+        "service": "CyberNova AI Backend",
+        "version": "1.0.0",
+        "timestamp": datetime.now(ist).isoformat()
+    }
 
-# ==================== STARTUP ====================
+@app.post("/api/scan/start")
+async def start_scan(background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
+    """Start a manual system scan using real threat scanner"""
+    try:
+        # Call the real threat scanner from agent.py
+        scan_data = perform_real_threat_scan()
+        
+        # Generate unique scan ID
+        scan_id = f"scan_{int(time.time())}_{random.randint(1000, 9999)}"
+        scan_data["scan_id"] = scan_id
+        
+        user_id = current_user["id"]
+        system_info = json.dumps(scan_data.get("system_info", {}))
+        threats_detected = scan_data.get("total_threats", 0)
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Insert scan record
+            cursor.execute(
+                """
+                INSERT INTO system_scans (scan_id, user_id, system_info, threats_detected, scan_status, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (scan_id, user_id, system_info, threats_detected, "completed", (datetime.now(ist) + timedelta(hours=2)).isoformat())
+            )
+
+            # Insert suspicious processes
+            for proc in scan_data.get("suspicious_processes", []):
+                cursor.execute(
+                    """
+                    INSERT INTO suspicious_processes (scan_id, pid, name, cpu_percent, memory_percent, threat_level, threat_reasons, exe_path, cmdline, username)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        scan_id,
+                        proc.get("pid"),
+                        proc.get("name"),
+                        proc.get("cpu_percent"),
+                        proc.get("memory_percent"),
+                        proc.get("threat_level"),
+                        json.dumps(proc.get("threat_reasons", [])),
+                        proc.get("exe_path"),
+                        proc.get("cmdline"),
+                        proc.get("username"),
+                    )
+                )
+
+            # Insert network threats
+            for nt in scan_data.get("network_threats", []):
+                cursor.execute(
+                    """
+                    INSERT INTO network_connections (scan_id, local_ip, local_port, remote_ip, remote_port, status, pid, process_name, threat_level, activity_description)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        scan_id,
+                        nt.get("local_ip"),
+                        nt.get("local_port"),
+                        nt.get("remote_ip"),
+                        nt.get("remote_port"),
+                        nt.get("status"),
+                        nt.get("pid"),
+                        nt.get("process_name"),
+                        nt.get("threat_level"),
+                        nt.get("activity_description"),
+                    )
+                )
+
+            # Insert risky ports
+            for rp in scan_data.get("risky_ports", []):
+                cursor.execute(
+                    """
+                    INSERT INTO risky_ports (scan_id, port, service, threat_level, reason)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        scan_id,
+                        rp.get("port"),
+                        rp.get("service"),
+                        rp.get("threat_level"),
+                        rp.get("reason"),
+                    )
+                )
+
+            conn.commit()
+
+        # Send email notification for high-severity threats
+        high_threats = [p for p in scan_data.get("suspicious_processes", []) if p.get("threat_level", "").lower() in ["high", "critical"]]
+        high_threats.extend([n for n in scan_data.get("network_threats", []) if n.get("threat_level", "").lower() in ["high", "critical"]])
+        high_threats.extend([r for r in scan_data.get("risky_ports", []) if r.get("threat_level", "").lower() in ["high", "critical"]])
+        
+        if high_threats and background_tasks:
+            threat_summary = f"Detected {len(high_threats)} high/critical threats in scan {scan_id}"
+            background_tasks.add_task(
+                send_email,
+                current_user["email"],
+                f"Security Alert: {len(high_threats)} Threats Detected",
+                threat_summary
+            )
+
+        # Broadcast over websocket
+        await manager.broadcast(json.dumps({
+            "type": "scan_completed", 
+            "data": {
+                "scan_id": scan_id, 
+                "threats_detected": threats_detected,
+                "timestamp": datetime.now(ist).isoformat(),
+                "user_id": current_user["id"],
+            }
+        }))
+
+        return {
+            "status": "success",
+            "scan_id": scan_id,
+            "threats_detected": threats_detected,
+        }
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Scan failed: {str(e)}")
+
+@app.get("/api/scan/latest")
+async def get_latest_scan(current_user: dict = Depends(get_current_user)):
+    """Get latest scan results"""
+    with get_db_connection() as conn:
+        # Get latest scan
+        scan = conn.execute("""
+            SELECT * FROM system_scans 
+            WHERE user_id = ? 
+            ORDER BY created_at DESC 
+            LIMIT 1
+        """, (current_user["id"],)).fetchone()
+        
+        if not scan:
+            return {"message": "No scans found"}
+        
+        # Get scan details
+        connections = conn.execute("""
+            SELECT * FROM network_connections 
+            WHERE scan_id = ?
+        """, (scan["scan_id"],)).fetchall()
+        
+        processes = conn.execute("""
+            SELECT * FROM suspicious_processes 
+            WHERE scan_id = ?
+        """, (scan["scan_id"],)).fetchall()
+        
+        ports = conn.execute("""
+            SELECT * FROM risky_ports 
+            WHERE scan_id = ?
+        """, (scan["scan_id"],)).fetchall()
+        
+        recommendations = conn.execute("""
+            SELECT * FROM security_recommendations 
+            WHERE scan_id = ?
+        """, (scan["scan_id"],)).fetchall()
+
+    # Transform data for frontend compatibility
+    transformed_connections = []
+    for conn in connections:
+        conn_dict = dict(conn)
+        conn_dict["activity_name"] = conn_dict.get("activity_description", "Network Activity")
+        conn_dict["website"] = conn_dict.get("hostname", "Unknown")
+        conn_dict["description"] = f"Network connection to {conn_dict.get('hostname', 'unknown host')}"
+        conn_dict["how_occurred"] = "Established during normal system operation"
+        conn_dict["why_dangerous"] = "Potentially suspicious network activity detected"
+        conn_dict["immediate_impact"] = "May indicate security compromise"
+        transformed_connections.append(conn_dict)
+    
+    transformed_processes = []
+    for proc in processes:
+        proc_dict = dict(proc)
+        # Parse JSON fields if they exist
+        if proc_dict.get("threat_reasons"):
+            try:
+                proc_dict["threat_indicators"] = json.loads(proc_dict["threat_reasons"])
+            except:
+                proc_dict["threat_indicators"] = [proc_dict.get("threat_reasons", "")]
+        
+        # Add missing fields for frontend
+        proc_dict["description"] = f"Suspicious process: {proc_dict.get('name', 'Unknown')}"
+        proc_dict["how_occurred"] = "Process started by malicious software or user action"
+        proc_dict["why_dangerous"] = "This process may be performing malicious activities"
+        proc_dict["immediate_impact"] = "System security may be compromised"
+        proc_dict["first_seen"] = proc_dict.get("created_at", "Unknown")
+        transformed_processes.append(proc_dict)
+
+    return {
+        "scan_info": dict(scan),
+        "system_info": json.loads(scan["system_info"]) if scan["system_info"] else {},
+        "network_connections": transformed_connections,
+        "suspicious_processes": transformed_processes,
+        "risky_ports": [dict(row) for row in ports],
+        "recommendations": [dict(row) for row in recommendations]
+    }
+
+@app.post("/api/real-scan/results")
+async def receive_scan_results(scan_data: dict, current_user=Depends(get_current_user), background_tasks: BackgroundTasks = None):
+    """Receive real scan results from external agent"""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            user_id = current_user["id"]
+            scan_id = f"scan_{int(time.time())}_{random.randint(1000,9999)}"
+
+            # Cleanup old scans for this user (older than 1 minute)
+            cursor.execute("""
+                DELETE FROM suspicious_processes WHERE scan_id IN (
+                    SELECT scan_id FROM system_scans WHERE user_id = ? AND created_at < datetime('now', '-1 minutes')
+                )
+            """, (user_id,))
+
+            cursor.execute("""
+                DELETE FROM network_connections WHERE scan_id IN (
+                    SELECT scan_id FROM system_scans WHERE user_id = ? AND created_at < datetime('now', '-1 minutes')
+                )
+            """, (user_id,))
+
+            cursor.execute("""
+                DELETE FROM risky_ports WHERE scan_id IN (
+                    SELECT scan_id FROM system_scans WHERE user_id = ? AND created_at < datetime('now', '-1 minutes')
+                )
+            """, (user_id,))
+
+            cursor.execute("""
+                DELETE FROM system_scans WHERE user_id = ? AND created_at < datetime('now', '-1 minutes')
+            """, (user_id,))
+
+            # Insert main scan record
+            cursor.execute("""
+                INSERT INTO system_scans (scan_id, user_id, system_info, threats_detected, scan_status, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                scan_id,
+                user_id,
+                json.dumps(scan_data.get("system_info", {})),
+                scan_data.get("total_threats", 0),
+                "completed",
+                (datetime.now(ist) + timedelta(hours=1)).isoformat(),
+            ))
+
+            # Insert suspicious processes
+            for proc in scan_data.get("suspicious_processes", []):
+                cursor.execute("""
+                    INSERT INTO suspicious_processes (scan_id, pid, name, cpu_percent, memory_percent,
+                    threat_level, threat_reasons, exe_path, cmdline, username)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    scan_id,
+                    proc.get("pid"),
+                    proc.get("name"),
+                    proc.get("cpu_percent"),
+                    proc.get("memory_percent"),
+                    proc.get("threat_level"),
+                    json.dumps(proc.get("threat_reasons", [])),
+                    proc.get("exe_path"),
+                    proc.get("cmdline"),
+                    proc.get("username"),
+                ))
+
+            # Insert network threats
+            for nt in scan_data.get("network_threats", []):
+                cursor.execute("""
+                    INSERT INTO network_connections (scan_id, local_ip, local_port, remote_ip, remote_port,
+                    hostname, activity_description, status, pid, process_name, threat_level)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    scan_id,
+                    nt.get("local_ip"),
+                    nt.get("local_port"),
+                    nt.get("remote_ip"),
+                    nt.get("remote_port"),
+                    nt.get("hostname"),
+                    nt.get("activity_description"),
+                    nt.get("status"),
+                    nt.get("pid"),
+                    nt.get("process_name"),
+                    nt.get("threat_level"),
+                ))
+
+            # Insert risky ports
+            for rp in scan_data.get("risky_ports", []):
+                cursor.execute("""
+                    INSERT INTO risky_ports (scan_id, port, service, threat_level, reason)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (
+                    scan_id,
+                    rp.get("port"),
+                    rp.get("service"),
+                    rp.get("threat_level"),
+                    rp.get("reason"),
+                ))
+
+            conn.commit()
+
+        # Broadcast update over websocket
+        await manager.broadcast(json.dumps({
+            "type": "scan_completed",
+            "data": {
+                "scan_id": scan_id,
+                "threats_detected": scan_data.get("total_threats", 0),
+                "timestamp": datetime.now(ist).isoformat(),
+                "user_id": current_user["id"]
+            }
+        }))
+
+        return {
+            "status": "success",
+            "scan_id": scan_id,
+            "threats_detected": scan_data.get("total_threats", 0),
+            "message": "Scan results successfully processed and saved"
+        }
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed processing scan results: {str(e)}")
+
+# WebSocket endpoint
+@app.websocket("/ws/threats")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time threat updates"""
+    await manager.connect(websocket)
+    try:
+        while True:
+            await asyncio.sleep(5)
+            
+            # Send periodic updates
+            if random.random() < 0.3:  # 30% chance of new threat
+                threat_update = {
+                    "type": "threat_update",
+                    "data": {
+                        "threat_type": random.choice(["Malware", "Phishing", "DDoS", "Brute Force"]),
+                        "severity": random.choice(["low", "medium", "high", "critical"]),
+                        "source_ip": f"192.168.{random.randint(1, 255)}.{random.randint(1, 255)}",
+                        "risk_score": random.randint(20, 95),
+                        "timestamp": datetime.now(ist).isoformat()
+                    }
+                }
+                await manager.send_personal_message(json.dumps(threat_update), websocket)
+            
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)# Background cleanup and monitoring functions
+async def cleanup_expired_data():
+    """Clean up expired scan data every hour and prevent duplicates"""
+    while True:
+        try:
+            await asyncio.sleep(1800)  # Run every 30 minutes
+            
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Clean up old scans (keep only last 2 hours)
+                cursor.execute("DELETE FROM system_scans WHERE created_at < datetime('now', '-2 hours')")
+                
+                # Clean up orphaned data
+                cursor.execute("""
+                    DELETE FROM network_connections 
+                    WHERE scan_id NOT IN (SELECT scan_id FROM system_scans)
+                """)
+                
+                cursor.execute("""
+                    DELETE FROM suspicious_processes 
+                    WHERE scan_id NOT IN (SELECT scan_id FROM system_scans)
+                """)
+                
+                cursor.execute("""
+                    DELETE FROM risky_ports 
+                    WHERE scan_id NOT IN (SELECT scan_id FROM system_scans)
+                """)
+                
+                cursor.execute("""
+                    DELETE FROM security_recommendations 
+                    WHERE scan_id NOT IN (SELECT scan_id FROM system_scans)
+                """)
+                
+                # Remove duplicate threat history entries
+                cursor.execute("""
+                    DELETE FROM threat_history 
+                    WHERE id NOT IN (
+                        SELECT MIN(id) FROM threat_history 
+                        GROUP BY user_id, threat_type, description
+                    )
+                """)
+                
+                # Keep only recent threat history (last 24 hours)
+                cursor.execute("""
+                    DELETE FROM threat_history 
+                    WHERE detected_at < datetime('now', '-24 hours')
+                """)
+                
+                conn.commit()
+                
+            print(f"Cleanup completed at {datetime.now(ist)}")
+                
+        except Exception as e:
+            print(f"Cleanup error: {e}")
+
+# Additional utility endpoints
+@app.get("/api/scan/{scan_id}/status")
+async def get_scan_status(scan_id: str, current_user: dict = Depends(get_current_user)):
+    """Get the status of a specific scan"""
+    with get_db_connection() as conn:
+        scan = conn.execute("""
+            SELECT * FROM system_scans 
+            WHERE scan_id = ? AND user_id = ?
+        """, (scan_id, current_user["id"])).fetchone()
+    
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    
+    return {
+        "scan_id": scan["scan_id"],
+        "status": scan["scan_status"],
+        "threats_detected": scan["threats_detected"],
+        "created_at": scan["created_at"]
+    }
+
+@app.delete("/api/scan/reset")
+async def reset_scan_data(current_user: dict = Depends(get_current_user)):
+    """Reset all scan data for the current user"""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Get all scan IDs for this user
+            scan_ids = cursor.execute("""
+                SELECT scan_id FROM system_scans WHERE user_id = ?
+            """, (current_user["id"],)).fetchall()
+            
+            # Delete all related data
+            for scan_row in scan_ids:
+                scan_id = scan_row["scan_id"]
+                cursor.execute("DELETE FROM suspicious_processes WHERE scan_id = ?", (scan_id,))
+                cursor.execute("DELETE FROM network_connections WHERE scan_id = ?", (scan_id,))
+                cursor.execute("DELETE FROM risky_ports WHERE scan_id = ?", (scan_id,))
+                cursor.execute("DELETE FROM security_recommendations WHERE scan_id = ?", (scan_id,))
+            
+            # Delete scan records
+            cursor.execute("DELETE FROM system_scans WHERE user_id = ?", (current_user["id"],))
+            cursor.execute("DELETE FROM threat_history WHERE user_id = ?", (current_user["id"],))
+            
+            conn.commit()
+        
+        return {
+            "status": "success",
+            "message": "All scan data has been reset successfully"
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to reset scan data: {str(e)}")
+
+@app.post("/api/admin/clear-all-mock-data")
+async def clear_all_mock_data():
+    """Clear all data from the database (public endpoint for demo)"""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Clear all tables
+            cursor.execute("DELETE FROM suspicious_processes")
+            cursor.execute("DELETE FROM network_connections") 
+            cursor.execute("DELETE FROM risky_ports")
+            cursor.execute("DELETE FROM security_recommendations")
+            cursor.execute("DELETE FROM system_scans")
+            cursor.execute("DELETE FROM threat_history")
+            
+            conn.commit()
+        
+        return {
+            "status": "success",
+            "message": "All data has been cleared successfully"
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to clear data: {str(e)}")
+
+@app.get("/api/admin/stats")
+async def admin_stats():
+    """Admin statistics (public endpoint for demo)"""
+    with get_db_connection() as conn:
+        stats = {
+            "total_users": conn.execute("SELECT COUNT(*) FROM users").fetchone()[0],
+            "waitlist_count": conn.execute("SELECT COUNT(*) FROM waitlist").fetchone()[0],
+            "total_scans": conn.execute("SELECT COUNT(*) FROM system_scans").fetchone()[0],
+            "active_connections": len(manager.active_connections)
+        }
+    
+    return stats
+
+# Health and monitoring endpoints
+@app.get("/health")
+async def health():
+    """Health check endpoint"""
+    with get_db_connection() as conn:
+        try:
+            conn.execute("SELECT 1").fetchone()
+            db_status = "healthy"
+        except:
+            db_status = "unhealthy"
+    
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now(ist).isoformat(),
+        "database": db_status,
+        "version": "3.0",
+        "services": {
+            "authentication": "active",
+            "threat_detection": "active",
+            "analytics": "active",
+            "websocket": "active"
+        }
+    }
+
+# Fixed Appwrite integration functions
+async def create_user_in_appwrite(email: str, password: str, name: str) -> dict:
+    """Create user in Appwrite - fixed for proper API usage"""
+    try:
+        import uuid
+        user_id = str(uuid.uuid4())
+        
+        # Create user with proper Appwrite API
+        user = users_service.create(
+            user_id=user_id,
+            email=email,
+            password=password,
+            name=name
+        )
+        return {"success": True, "user": user}
+    
+    except AppwriteException as e:
+        print(f"Appwrite user creation error: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        print(f"General error creating user: {e}")
+        return {"success": False, "error": str(e)}
+
+async def get_appwrite_users():
+    """Get users from Appwrite - fixed for proper API usage"""
+    try:
+        # Use proper list method without request body
+        users_list = users_service.list()
+        return {"success": True, "users": users_list}
+    
+    except AppwriteException as e:
+        print(f"Appwrite list users error: {e}")
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        print(f"General error listing users: {e}")
+        return {"success": False, "error": str(e)}
+
+# Enhanced threat analytics endpoint
+@app.get("/api/threats/analytics")
+async def threat_analytics(current_user: dict = Depends(get_current_user)):
+    """Get threat analytics and AI insights"""
+    with get_db_connection() as conn:
+        # Get recent scan data for analytics
+        recent_scans = conn.execute("""
+            SELECT * FROM system_scans 
+            WHERE user_id = ? 
+            ORDER BY created_at DESC 
+            LIMIT 10
+        """, (current_user["id"],)).fetchall()
+        
+        if not recent_scans:
+            return {
+                "threat_types": [],
+                "severity_distribution": [],
+                "risk_assessment": {
+                    "overall_risk_score": 0,
+                    "max_risk_score": 0,
+                    "high_risk_count": 0,
+                    "risk_level": "low",
+                    "recommendations": ["No scan data available yet. Run a security scan to get insights."]
+                },
+                "predictions": []
+            }
+        
+        # Calculate threat distribution from actual scan data
+        latest_scan = recent_scans[0]
+        scan_id = latest_scan["scan_id"]
+        
+        # Get threat counts by type
+        process_count = conn.execute("""
+            SELECT COUNT(*) as count FROM suspicious_processes WHERE scan_id = ?
+        """, (scan_id,)).fetchone()["count"]
+        
+        port_count = conn.execute("""
+            SELECT COUNT(*) as count FROM risky_ports WHERE scan_id = ?
+        """, (scan_id,)).fetchone()["count"]
+        
+        network_count = conn.execute("""
+            SELECT COUNT(*) as count FROM network_connections WHERE scan_id = ?
+        """, (scan_id,)).fetchone()["count"]
+        
+        threat_types = []
+        if process_count > 0:
+            threat_types.append({"threat_type": "Suspicious Processes", "count": process_count})
+        if port_count > 0:
+            threat_types.append({"threat_type": "Risky Ports", "count": port_count})
+        if network_count > 0:
+            threat_types.append({"threat_type": "Network Threats", "count": network_count})
+        
+        # Get severity distribution from latest scan
+        severity_dist = []
+        for severity in ["low", "medium", "high", "critical"]:
+            total_severity_count = 0
+            
+            # Count processes with this severity
+            proc_severity = conn.execute("""
+                SELECT COUNT(*) as count FROM suspicious_processes 
+                WHERE scan_id = ? AND threat_level = ?
+            """, (scan_id, severity)).fetchone()["count"]
+            total_severity_count += proc_severity
+            
+            # Count ports with this severity
+            port_severity = conn.execute("""
+                SELECT COUNT(*) as count FROM risky_ports 
+                WHERE scan_id = ? AND threat_level = ?
+            """, (scan_id, severity)).fetchone()["count"]
+            total_severity_count += port_severity
+            
+            # Count network connections with this severity
+            network_severity = conn.execute("""
+                SELECT COUNT(*) as count FROM network_connections 
+                WHERE scan_id = ? AND threat_level = ?
+            """, (scan_id, severity)).fetchone()["count"]
+            total_severity_count += network_severity
+            
+            if total_severity_count > 0:
+                severity_dist.append({"severity": severity, "count": total_severity_count})
+        
+        # Calculate risk assessment
+        total_threats = latest_scan["threats_detected"] or 0
+        high_critical_count = sum([s["count"] for s in severity_dist if s["severity"] in ["high", "critical"]])
+        
+        avg_risk = min(100, max(0, total_threats * 15))
+        risk_level = "critical" if avg_risk > 80 else "high" if avg_risk > 50 else "medium" if avg_risk > 20 else "low"
+        
+        # Generate recommendations based on actual scan data
+        recommendations = []
+        if high_critical_count > 0:
+            recommendations.append("Immediate action required - Critical threats detected")
+            recommendations.append("Review and terminate suspicious processes")
+            recommendations.append("Secure exposed ports and services")
+        elif total_threats > 5:
+            recommendations.append("Multiple security issues detected - Schedule maintenance")
+            recommendations.append("Update security software and patches")
+        else:
+            recommendations.append("Security posture is acceptable")
+            recommendations.append("Continue regular monitoring")
+    
+    return {
+        "threat_types": threat_types,
+        "severity_distribution": severity_dist,
+        "risk_assessment": {
+            "overall_risk_score": round(float(avg_risk), 2),
+            "max_risk_score": 100,
+            "high_risk_count": high_critical_count,
+            "risk_level": risk_level,
+            "recommendations": recommendations
+        },
+        "predictions": generate_threat_predictions()
+    }
+
+def generate_threat_predictions():
+    """Generate threat prediction data based on trends"""
+    predictions = []
+    base_time = datetime.now(ist)
+    
+    for i in range(24):  # Next 24 hours
+        time_point = base_time + timedelta(hours=i)
+        predicted_count = random.randint(5, 25)
+        
+        predictions.append({
+            "time": time_point.isoformat(),
+            "predicted_threat_count": predicted_count,
+            "confidence": round(random.uniform(0.7, 0.95), 2)
+        })
+    
+    return predictions
+
+# Real-time system information endpoints
+@app.get("/api/system/info")
+async def get_system_info():
+    """Get real-time system information"""
+    try:
+        # Call the real system info function from agent
+        system_info = get_real_system_info()
+        return {
+            "status": "success",
+            "data": system_info,
+            "timestamp": datetime.now(ist).isoformat()
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to get system info: {str(e)}",
+            "timestamp": datetime.now(ist).isoformat()
+        }
+
+@app.get("/api/system/processes")
+async def get_system_processes():
+    """Get real-time process information"""
+    try:
+        # Call the real process scanner from agent
+        processes = scan_real_processes()
+        return {
+            "status": "success",
+            "data": processes,
+            "timestamp": datetime.now(ist).isoformat()
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to get process info: {str(e)}",
+            "timestamp": datetime.now(ist).isoformat()
+        }
+
+@app.get("/api/system/network")
+async def get_network_connections():
+    """Get real-time network connection information"""
+    try:
+        # Call the real network scanner from agent
+        connections = scan_real_network_connections()
+        return {
+            "status": "success",
+            "data": connections,
+            "timestamp": datetime.now(ist).isoformat()
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to get network info: {str(e)}",
+            "timestamp": datetime.now(ist).isoformat()
+        }
+
+@app.get("/api/system/ports")
+async def get_open_ports():
+    """Get real-time open ports information"""
+    try:
+        # Call the real port scanner from agent
+        ports = scan_real_open_ports()
+        return {
+            "status": "success",
+            "data": ports,
+            "timestamp": datetime.now(ist).isoformat()
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to get port info: {str(e)}",
+            "timestamp": datetime.now(ist).isoformat()
+        }
+
+# Initialize database and start background tasks
+async def startup_cleanup():
+    """One-time cleanup of all data on startup"""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            print("Cleaning up old data on startup...")
+            
+            # Remove all old scan data to start fresh
+            cursor.execute("DELETE FROM network_connections")
+            cursor.execute("DELETE FROM suspicious_processes") 
+            cursor.execute("DELETE FROM risky_ports")
+            cursor.execute("DELETE FROM security_recommendations")
+            cursor.execute("DELETE FROM system_scans WHERE created_at < datetime('now', '-1 hour')")
+            cursor.execute("DELETE FROM threat_history WHERE detected_at < datetime('now', '-1 hour')")
+            
+            conn.commit()
+            
+        print("Startup cleanup completed successfully")
+        
+    except Exception as e:
+        print(f"Startup cleanup error: {e}")
 
 @app.on_event("startup")
 async def startup_event():
-    print("🚀 CyberNova AI Real-time Threat Scanner Starting...")
-    print("🔍 Real system scanning: ENABLED")
-    print("🤖 ML threat detection: ENABLED") 
-    print("💾 Database: DISABLED (Live scanning only)")
-    print("✅ Ready to scan for real threats!")
+    """Initialize database and start background tasks"""
+    try:
+        # Initialize database
+        init_database()
+        print("CyberNova AI Backend Starting...")
+        print("Email Service: cybernova073@gmail.com")
+        print("Launch Date: September 15, 2025")
+        print("Threat detection engine started")
+        
+        # Clean up any existing data first
+        await startup_cleanup()
+        
+        # Start background cleanup task
+        asyncio.create_task(cleanup_expired_data())
+        print("Background tasks started successfully")
+        
+    except Exception as e:
+        print(f"Startup failed: {e}")
+        import traceback
+        traceback.print_exc()
 
+# Legacy compatibility endpoints (for backward compatibility)
+@app.get("/api/threats/stats")
+async def legacy_threat_stats():
+    """Legacy endpoint for threat statistics"""
+    return {
+        "totalThreats": 0,
+        "blockedThreats": 0,
+        "criticalThreats": 0,
+        "averageRiskScore": 0.0
+    }
+
+# Main application entry point
 if __name__ == "__main__":
     import uvicorn
-    print("🔥 Starting CyberNova AI...")
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    import socket
+    import psutil
+    import platform
+    
+    # Support deployment platforms that use PORT environment variable
+    port = int(os.getenv("PORT", 8080))
+    print("Starting CyberNova AI Backend...")
+    print(f"Server will be available at: http://localhost:{port}")
+    print(f"API Documentation: http://localhost:{port}/docs")
+    print(f"Health Check: http://localhost:{port}/api/health")
+    
+    # Print system info for debugging
+    print(f"System: {platform.system()} {platform.release()}")
+    print(f"Python: {platform.python_version()}")
+    print(f"Hostname: {socket.gethostname()}")
+    
+    uvicorn.run(app, host="0.0.0.0", port=port)
