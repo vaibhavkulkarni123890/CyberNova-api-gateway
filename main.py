@@ -563,6 +563,215 @@ async def get_current_user_info(current_user: dict = Depends(get_current_user)):
         "created_at": current_user["created_at"]
     }
 
+@app.get("/api/dashboard/real-data")
+async def get_real_dashboard_data(current_user: dict = Depends(get_current_user)):
+    """Get real dashboard data from database - no mock data"""
+    try:
+        with get_db_connection() as conn:
+            # Get latest scan for user
+            latest_scan = conn.execute("""
+                SELECT * FROM system_scans 
+                WHERE user_id = ? 
+                ORDER BY created_at DESC 
+                LIMIT 1
+            """, (current_user["id"],)).fetchone()
+            
+            if not latest_scan:
+                return JSONResponse(content={
+                    "data": {
+                        "systemInfo": None,
+                        "stats": {
+                            "totalThreats": 0,
+                            "activeAlerts": 0,
+                            "riskScore": 0,
+                            "systemHealth": 100,
+                            "lastScanTime": None,
+                            "scanStatus": "No scans yet"
+                        },
+                        "alerts": [],
+                        "scanData": None
+                    }
+                })
+            
+            scan_id = latest_scan["scan_id"]
+            
+            # Get system info from latest scan
+            system_info = {}
+            if latest_scan["system_info"]:
+                try:
+                    system_info = json.loads(latest_scan["system_info"])
+                except:
+                    system_info = {}
+            
+            # Get suspicious processes from database
+            processes = conn.execute("""
+                SELECT * FROM suspicious_processes 
+                WHERE scan_id = ?
+                ORDER BY created_at DESC
+            """, (scan_id,)).fetchall()
+            
+            # Get network connections from database
+            connections = conn.execute("""
+                SELECT * FROM network_connections 
+                WHERE scan_id = ?
+                ORDER BY created_at DESC
+            """, (scan_id,)).fetchall()
+            
+            # Get risky ports from database
+            ports = conn.execute("""
+                SELECT * FROM risky_ports 
+                WHERE scan_id = ?
+                ORDER BY created_at DESC
+            """, (scan_id,)).fetchall()
+            
+            # Get security recommendations from database
+            recommendations = conn.execute("""
+                SELECT * FROM security_recommendations 
+                WHERE scan_id = ?
+                ORDER BY created_at DESC
+            """, (scan_id,)).fetchall()
+            
+            # Build real alerts from database data
+            alerts = []
+            
+            # Add process alerts (real data)
+            for proc in processes:
+                if proc["threat_level"] in ["high", "critical"]:
+                    threat_reasons = []
+                    if proc["threat_reasons"]:
+                        try:
+                            threat_reasons = json.loads(proc["threat_reasons"])
+                        except:
+                            threat_reasons = [proc["threat_reasons"]]
+                    
+                    alerts.append({
+                        "id": f"process_{proc['pid']}_{proc['id']}",
+                        "title": f"Suspicious Process: {proc['name']}",
+                        "description": f"Real threat detected: {proc['name']} (PID: {proc['pid']}) - {', '.join(threat_reasons[:2])}",
+                        "severity": proc["threat_level"],
+                        "timestamp": proc["created_at"],
+                        "sourceIp": "Local System",
+                        "riskScore": 90 if proc["threat_level"] == "critical" else 75,
+                        "isBlocked": False,
+                        "type": "process",
+                        "resolution": {
+                            "action": "Investigate and terminate if malicious",
+                            "steps": [
+                                "1. Check process details in Task Manager",
+                                "2. Verify process digital signature",
+                                "3. Run antivirus scan if suspicious", 
+                                "4. Monitor network connections"
+                            ],
+                            "prevention": "Keep system updated and use reputable security software"
+                        }
+                    })
+            
+            # Add port alerts (real data)
+            for port in ports:
+                if port["threat_level"] in ["high", "critical"]:
+                    alerts.append({
+                        "id": f"port_{port['port']}_{port['id']}",
+                        "title": f"Risky Port: {port['port']} ({port['service']})",
+                        "description": f"Real vulnerability: {port['reason']}",
+                        "severity": port["threat_level"],
+                        "timestamp": port["created_at"],
+                        "sourceIp": "Local System",
+                        "riskScore": 85 if port["threat_level"] == "critical" else 65,
+                        "isBlocked": False,
+                        "type": "port",
+                        "resolution": {
+                            "action": "Secure or disable the port",
+                            "steps": [
+                                "1. Verify if the service is needed",
+                                "2. Configure firewall rules",
+                                "3. Disable if not required",
+                                "4. Monitor port activity"
+                            ],
+                            "prevention": "Regular security audits and firewall configuration"
+                        }
+                    })
+            
+            # Add network alerts (real data)
+            for conn_data in connections:
+                if conn_data["threat_level"] in ["high", "critical"]:
+                    alerts.append({
+                        "id": f"network_{conn_data['remote_ip']}_{conn_data['id']}",
+                        "title": "Suspicious Network Activity",
+                        "description": f"Real threat: {conn_data['activity_description'] or 'Suspicious connection detected'}",
+                        "severity": conn_data["threat_level"],
+                        "timestamp": conn_data["created_at"],
+                        "sourceIp": conn_data["remote_ip"],
+                        "riskScore": 80 if conn_data["threat_level"] == "critical" else 60,
+                        "isBlocked": False,
+                        "type": "network",
+                        "resolution": {
+                            "action": "Block suspicious traffic",
+                            "steps": [
+                                "1. Block suspicious IP addresses",
+                                "2. Check for malware infections",
+                                "3. Review network logs",
+                                "4. Update firewall rules"
+                            ],
+                            "prevention": "Use reputable DNS and avoid suspicious websites"
+                        }
+                    })
+            
+            # Calculate real stats from actual data
+            total_threats = len(processes) + len(ports) + len([c for c in connections if c["threat_level"] in ["medium", "high", "critical"]])
+            active_alerts = len(alerts)
+            risk_score = min(100, max(0, active_alerts * 12)) if active_alerts > 0 else 0
+            system_health = max(0, 100 - risk_score)
+            
+            # Prepare scan data for frontend
+            formatted_processes = []
+            for proc in processes:
+                proc_dict = dict(proc)
+                # Parse threat_reasons JSON if exists
+                if proc_dict.get("threat_reasons"):
+                    try:
+                        proc_dict["threat_indicators"] = json.loads(proc_dict["threat_reasons"])
+                    except:
+                        proc_dict["threat_indicators"] = [proc_dict["threat_reasons"]]
+                formatted_processes.append(proc_dict)
+            
+            formatted_connections = []
+            for conn_data in connections:
+                conn_dict = dict(conn_data)
+                conn_dict["activity_name"] = conn_dict.get("activity_description", "Network Activity")
+                conn_dict["website"] = conn_dict.get("hostname", "Unknown")
+                formatted_connections.append(conn_dict)
+            
+            # Build complete response with real data
+            response_data = {
+                "data": {
+                    "systemInfo": system_info,
+                    "stats": {
+                        "totalThreats": total_threats,
+                        "activeAlerts": active_alerts,
+                        "riskScore": round(risk_score, 1),
+                        "systemHealth": round(system_health, 1),
+                        "lastScanTime": latest_scan["created_at"],
+                        "scanStatus": latest_scan["scan_status"]
+                    },
+                    "alerts": alerts,
+                    "scanData": {
+                        "system_info": system_info,
+                        "suspicious_processes": formatted_processes,
+                        "network_connections": formatted_connections,
+                        "risky_ports": [dict(row) for row in ports],
+                        "recommendations": [dict(row) for row in recommendations]
+                    }
+                }
+            }
+            
+            return JSONResponse(content=response_data)
+            
+    except Exception as e:
+        import traceback
+        print(f"Database error in dashboard: {e}")
+        print(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
 
 # Dashboard Endpoints
 @app.get("/api/dashboard/stats")
