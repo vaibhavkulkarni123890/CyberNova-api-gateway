@@ -26,21 +26,24 @@ from agent import (
     send_scan_results
 )
 import pytz
-from appwrite.client import Client
-from appwrite.services.users import Users
-from appwrite.services.databases import Databases
-from appwrite.exception import AppwriteException
-import logging
+from dotenv import load_dotenv
+import re
+load_dotenv()  # Load environment variables from .env file
+# from appwrite.client import Client
+# from appwrite.services.users import Users
+# from appwrite.services.databases import Databases
+# from appwrite.exception import AppwriteException
+# import logging
 
 # Initialize Appwrite client
-client = Client()
-client.set_endpoint(os.getenv('REACT_APP_APPWRITE_ENDPOINT'))
-client.set_project(os.getenv('REACT_APP_APPWRITE_PROJECT_ID'))
-client.set_key(os.getenv('REACT_APP_APPWRITE_FUNCTION_ID'))
+# client = Client()
+# client.set_endpoint(os.getenv('REACT_APP_APPWRITE_ENDPOINT'))
+# client.set_project(os.getenv('REACT_APP_APPWRITE_PROJECT_ID'))
+# client.set_key(os.getenv('REACT_APP_APPWRITE_FUNCTION_ID'))
 
 # Initialize Appwrite services
-users_service = Users(client)
-databases_service = Databases(client)
+users_service =None
+databases_service = None
 
 app = FastAPI(
     title="CyberNova AI - Advanced Cybersecurity Platform", 
@@ -71,15 +74,237 @@ EMAIL_PASS = os.getenv("EMAIL_PASS", "hsrz fymn gplp enbp")
 security = HTTPBearer()
 
 # Database Configuration
-DATABASE_PATH = "cybernova.db"
 
-# MySQL Configuration (for production deployment)
-MYSQL_HOST = os.getenv("MYSQLHOST")
-MYSQL_PORT = int(os.getenv("MYSQLPORT", "3306"))
-MYSQL_USER = os.getenv("MYSQLUSER", "root")
-MYSQL_PASSWORD = os.getenv("MYSQL_ROOT_PASSWORD")
-MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "railway")
-USE_MYSQL = bool(MYSQL_HOST and MYSQL_PASSWORD)
+# Replace your database configuration section with this:
+
+# MySQL Configuration (matching your .env.example)
+DATABASE_URL = os.getenv("DATABASE_URL", "mysql+pymysql://root:password@mysql:3306/cyberguard")
+DB_USERNAME = os.getenv("DB_USERNAME", "root")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "password")
+
+if DATABASE_URL:
+    url_pattern = r'mysql\+pymysql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)'
+    match = re.match(url_pattern, DATABASE_URL)
+    if match:
+        MYSQL_USER = match.group(1)
+        MYSQL_PASSWORD = match.group(2) 
+        MYSQL_HOST = match.group(3)
+        MYSQL_PORT = int(match.group(4))
+        MYSQL_DATABASE = match.group(5)
+    else:
+        # Fallback values
+        MYSQL_HOST = "mysql"
+        MYSQL_PORT = 3306
+        MYSQL_USER = DB_USERNAME
+        MYSQL_PASSWORD = DB_PASSWORD
+        MYSQL_DATABASE = "cyberguard"
+else:
+    # Fallback when no DATABASE_URL
+    MYSQL_HOST = "mysql"
+    MYSQL_PORT = 3306
+    MYSQL_USER = DB_USERNAME
+    MYSQL_PASSWORD = DB_PASSWORD
+    MYSQL_DATABASE = "cyberguard"
+
+USE_MYSQL = bool(MYSQL_PASSWORD)
+print(f"MySQL Config - Host: {MYSQL_HOST}, User: {MYSQL_USER}, Database: {MYSQL_DATABASE}")
+print(f"Using MySQL: {USE_MYSQL}")
+
+@contextmanager
+def get_db_connection():
+    """Get database connection (MySQL or SQLite)"""
+    if USE_MYSQL:
+        # Use MySQL for production/docker
+        connection = None
+        try:
+            connection = pymysql.connect(
+                host=MYSQL_HOST,
+                port=MYSQL_PORT,
+                user=MYSQL_USER,
+                password=MYSQL_PASSWORD,
+                database=MYSQL_DATABASE,
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=False
+            )
+            print(f"Connected to MySQL database: {MYSQL_DATABASE}")
+            yield connection
+        except Exception as e:
+            print(f"MySQL connection error: {e}")
+            if connection:
+                connection.rollback()
+            raise e
+        finally:
+            if connection:
+                connection.close()
+    else:
+        # Use SQLite for local development
+        print("Using SQLite database for local development")
+        conn = sqlite3.connect(DATABASE_PATH, timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA cache_size=1000")
+        conn.execute("PRAGMA temp_store=memory")
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+def init_database():
+    """Initialize database with all required tables (MySQL or SQLite)"""
+    print("Initializing database...")
+    
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        # MySQL uses different syntax for AUTO_INCREMENT
+        if USE_MYSQL:
+            # MySQL syntax
+            auto_increment = "AUTO_INCREMENT"
+            current_timestamp = "CURRENT_TIMESTAMP"
+            text_type = "TEXT"
+            boolean_type = "BOOLEAN"
+        else:
+            # SQLite syntax  
+            auto_increment = "AUTOINCREMENT"
+            current_timestamp = "CURRENT_TIMESTAMP"
+            text_type = "TEXT"
+            boolean_type = "BOOLEAN"
+    
+        # Users table
+        cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY {auto_increment},
+                email {text_type} UNIQUE NOT NULL,
+                password_hash {text_type} NOT NULL,
+                full_name {text_type} NOT NULL,
+                company {text_type},
+                is_active {boolean_type} DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT {current_timestamp}
+            )
+        ''')
+        
+        # System scans table
+        cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS system_scans (
+                id INTEGER PRIMARY KEY {auto_increment},
+                scan_id {text_type} UNIQUE NOT NULL,
+                user_id INTEGER NOT NULL,
+                system_info {text_type},
+                threats_detected INTEGER DEFAULT 0,
+                scan_status {text_type} DEFAULT 'completed',
+                created_at TIMESTAMP DEFAULT {current_timestamp},
+                expires_at TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
+        # Network connections table
+        cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS network_connections (
+                id INTEGER PRIMARY KEY {auto_increment},
+                scan_id {text_type} NOT NULL,
+                local_ip {text_type},
+                local_port INTEGER,
+                remote_ip {text_type},
+                remote_port INTEGER,
+                hostname {text_type},
+                service_info {text_type},
+                activity_description {text_type},
+                status {text_type},
+                pid INTEGER,
+                process_name {text_type},
+                process_exe {text_type},
+                process_cmdline {text_type},
+                threat_level {text_type},
+                created_at TIMESTAMP DEFAULT {current_timestamp},
+                FOREIGN KEY (scan_id) REFERENCES system_scans (scan_id)
+            )
+        ''')
+        
+        # Suspicious processes table
+        cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS suspicious_processes (
+                id INTEGER PRIMARY KEY {auto_increment},
+                scan_id {text_type} NOT NULL,
+                pid INTEGER,
+                name {text_type},
+                cpu_percent REAL,
+                memory_percent REAL,
+                threat_level {text_type},
+                threat_reasons {text_type},
+                exe_path {text_type},
+                cmdline {text_type},
+                username {text_type},
+                network_activity {text_type},
+                behavior_analysis {text_type},
+                created_at TIMESTAMP DEFAULT {current_timestamp},
+                FOREIGN KEY (scan_id) REFERENCES system_scans (scan_id)
+            )
+        ''')
+        
+        # Risky ports table
+        cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS risky_ports (
+                id INTEGER PRIMARY KEY {auto_increment},
+                scan_id {text_type} NOT NULL,
+                port INTEGER,
+                service {text_type},
+                threat_level {text_type},
+                reason {text_type},
+                recommendation {text_type},
+                created_at TIMESTAMP DEFAULT {current_timestamp},
+                FOREIGN KEY (scan_id) REFERENCES system_scans (scan_id)
+            )
+        ''')
+        
+        # Threat history table
+        cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS threat_history (
+                id INTEGER PRIMARY KEY {auto_increment},
+                user_id INTEGER NOT NULL,
+                threat_type {text_type} NOT NULL,
+                severity {text_type} NOT NULL,
+                source_ip {text_type},
+                description {text_type},
+                risk_score INTEGER,
+                is_resolved {boolean_type} DEFAULT FALSE,
+                detected_at TIMESTAMP DEFAULT {current_timestamp},
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
+        # Security recommendations table
+        cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS security_recommendations (
+                id INTEGER PRIMARY KEY {auto_increment},
+                scan_id {text_type} NOT NULL,
+                type {text_type},
+                priority {text_type},
+                title {text_type},
+                description {text_type},
+                action {text_type},
+                details {text_type},
+                is_sent {boolean_type} DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT {current_timestamp},
+                FOREIGN KEY (scan_id) REFERENCES system_scans (scan_id)
+            )
+        ''')
+        
+        # Analytics table
+        cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS analytics (
+                id INTEGER PRIMARY KEY {auto_increment},
+                metric_type {text_type} NOT NULL,
+                metric_value REAL NOT NULL,
+                metadata {text_type},
+                created_at TIMESTAMP DEFAULT {current_timestamp}
+            )
+        ''')
+        
+        conn.commit()
+        print(f"Database initialized successfully using {'MySQL' if USE_MYSQL else 'SQLite'}")
 
 # Pydantic Models
 class UserRegister(BaseModel):
@@ -135,152 +360,6 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 # Database Functions
-def init_database():
-    """Initialize database with all required tables (MySQL or SQLite)"""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-    
-    # Users table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            full_name TEXT NOT NULL,
-            company TEXT,
-            is_active BOOLEAN DEFAULT TRUE,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # Waitlist table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS waitlist (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # System scans table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS system_scans (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            scan_id TEXT UNIQUE NOT NULL,
-            user_id INTEGER NOT NULL,
-            system_info TEXT,
-            threats_detected INTEGER DEFAULT 0,
-            scan_status TEXT DEFAULT 'completed',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            expires_at TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (id)
-        )
-    ''')
-    
-    # Network connections table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS network_connections (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            scan_id TEXT NOT NULL,
-            local_ip TEXT,
-            local_port INTEGER,
-            remote_ip TEXT,
-            remote_port INTEGER,
-            hostname TEXT,
-            service_info TEXT,
-            activity_description TEXT,
-            status TEXT,
-            pid INTEGER,
-            process_name TEXT,
-            process_exe TEXT,
-            process_cmdline TEXT,
-            threat_level TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (scan_id) REFERENCES system_scans (scan_id)
-        )
-    ''')
-    
-    # Suspicious processes table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS suspicious_processes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            scan_id TEXT NOT NULL,
-            pid INTEGER,
-            name TEXT,
-            cpu_percent REAL,
-            memory_percent REAL,
-            threat_level TEXT,
-            threat_reasons TEXT,
-            exe_path TEXT,
-            cmdline TEXT,
-            username TEXT,
-            network_activity TEXT,
-            behavior_analysis TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (scan_id) REFERENCES system_scans (scan_id)
-        )
-    ''')
-    
-    # Risky ports table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS risky_ports (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            scan_id TEXT NOT NULL,
-            port INTEGER,
-            service TEXT,
-            threat_level TEXT,
-            reason TEXT,
-            recommendation TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (scan_id) REFERENCES system_scans (scan_id)
-        )
-    ''')
-    
-    # Threat history table (permanent storage)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS threat_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            threat_type TEXT NOT NULL,
-            severity TEXT NOT NULL,
-            source_ip TEXT,
-            description TEXT,
-            risk_score INTEGER,
-            is_resolved BOOLEAN DEFAULT FALSE,
-            detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (id)
-        )
-    ''')
-    
-    # Security recommendations table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS security_recommendations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            scan_id TEXT NOT NULL,
-            type TEXT,
-            priority TEXT,
-            title TEXT,
-            description TEXT,
-            action TEXT,
-            details TEXT,
-            is_sent BOOLEAN DEFAULT FALSE,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (scan_id) REFERENCES system_scans (scan_id)
-        )
-    ''')
-    
-    # Analytics table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS analytics (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            metric_type TEXT NOT NULL,
-            metric_value REAL NOT NULL,
-            metadata TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    conn.commit()
 
 @contextmanager
 def get_db_connection():
