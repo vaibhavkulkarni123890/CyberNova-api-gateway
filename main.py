@@ -7,19 +7,7 @@ import platform
 import socket
 import asyncio
 import json
-import math
-import time
-import random
-from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
-import numpy as np
-from sklearn.ensemble import IsolationForest, GradientBoostingClassifier
-from sklearn.preprocessing import StandardScaler
-
-# FastAPI app
-app = FastAPI(
-    title="CyberNova AI - Real-time Threat Scanner",
-    description="Live system scanning with ML threat prediction - NO DATABASE",
+import mathTABASE",
     version="4.0.0"
 )
 
@@ -54,88 +42,19 @@ class ThreatModel:
         X = []
         y = []
         
-        for i in range(n_samples):
-            # Generate realistic process features
-            cpu_usage = np.random.exponential(15)  # Most processes use low CPU
-            memory_usage = np.random.exponential(10)  # Most processes use low memory
-            name_length = np.random.randint(5, 25)
-            process_entropy = np.random.uniform(0, 5)
-            network_connections = np.random.poisson(2)
-            file_operations = np.random.poisson(5)
             
-            # Create threat labels based on heuristics
-            is_threat = 0
-            if cpu_usage > 80 or memory_usage > 70:
-                is_threat = 1
-            if process_entropy > 4:  # High entropy names are suspicious
-                is_threat = 1
-            if network_connections > 10:  # Too many connections
-                is_threat = 1
-            
-            # Add some randomness
-            if np.random.random() < 0.1:
-                is_threat = 1 - is_threat
-            
-            features = [
-                cpu_usage, memory_usage, name_length, process_entropy,
-                network_connections, file_operations,
-                np.sin(i / 10), np.cos(i / 10),  # Time features
-                np.random.uniform(0, 1), np.random.uniform(0, 1)  # Random features
-            ]
-            
-            X.append(features)
-            y.append(is_threat)
-        
-        X = np.array(X)
-        y = np.array(y)
-        
-        # Fit models
-        self.scaler.fit(X)
-        X_scaled = self.scaler.transform(X)
-        
-        self.anomaly_detector.fit(X_scaled)
-        
-        try:
-            self.classifier.fit(X_scaled, y)
+            features = 
             self.trained = True
             print("✅ ML model trained successfully")
         except Exception as e:
-            print(f"⚠️ Classifier training failed: {e}")
-            self.trained = False
-    
-    def extract_features(self, process_data):
-        """Extract features from process data"""
-        name = process_data.get('name', '')
-        cpu = process_data.get('cpu_percent', 0)
-        memory = process_data.get('memory_percent', 0)
-        
-        # Calculate name entropy
-        name_entropy = 0
-        if name:
-            from collections import Counter
-            counts = Counter(name.lower())
-            total = len(name)
-            name_entropy = -sum((count/total) * math.log2(count/total) for count in counts.values())
-        
-        features = [
-            cpu,                           # CPU usage
-            memory,                        # Memory usage  
-            len(name),                     # Name length
-            name_entropy,                  # Name entropy
-            random.randint(0, 5),          # Simulated network connections
             random.randint(0, 10),         # Simulated file operations
-            math.sin(time.time() / 3600),  # Time of day feature
-            math.cos(time.time() / 3600),  # Time of day feature
-            1 if any(pattern in name.lower() for pattern in ['temp', 'tmp', 'download']) else 0,
-            1 if cpu > 50 else 0          # High CPU flag
-        ]
+            math.sime() / 3600),  # T
         
         return features
     
     def predict_threat(self, process_data):
         """Predict threat level for a process"""
-        features = self.extract_features(process_data)
-        
+        features = se
         # Rule-based scoring
         rule_score = 0
         name = process_data.get('name', '').lower()
@@ -526,3 +445,4 @@ if __name__ == "__main__":
     import uvicorn
     print("🔥 Starting CyberNova AI...")
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+
