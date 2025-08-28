@@ -2,12 +2,23 @@ from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from typing import Optional, List, Dict, Any
-import jwt, bcrypt, sqlite3, json, time, random, os, asyncio, httpx
+import jwt
+import bcrypt
+import sqlite3
+import json
+import time
+import random
+import os
+import asyncio
+import httpx
 from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
-import subprocess, psutil, socket, platform
+import subprocess
+import psutil
+import socket
+import platform
 from dotenv import load_dotenv
 import smtplib
 from email.mime.text import MIMEText
@@ -19,8 +30,8 @@ load_dotenv()
 
 # FastAPI app initialization
 app = FastAPI(
-    title="CyberNova AI - Main API Gateway",
-    description="Advanced Cybersecurity Platform with Real-time Threat Detection",
+    title="CyberNova AI - REAL Data API Gateway",
+    description="Advanced Cybersecurity Platform with REAL System Scanning",
     version="3.0.0"
 )
 
@@ -39,16 +50,13 @@ JWT_SECRET = os.getenv('JWT_SECRET', 'cybernova-secret-key-2025')
 JWT_ALGORITHM = 'HS256'
 
 # Database configuration
-DATABASE_PATH = os.getenv('DATABASE_PATH', 'cybernova.db')
+DATABASE_PATH = os.getenv('DATABASE_PATH', 'cybernova_real.db')
 
 # Email configuration
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
 EMAIL_USER = os.getenv('EMAIL_USER', 'cybernova073@gmail.com')
 EMAIL_PASS = os.getenv('EMAIL_PASS', 'hsrz fymn gplp enbp')
-
-# Analytics service URL
-ANALYTICS_SERVICE_URL = os.getenv('ANALYTICS_SERVICE_URL', 'http://analytics-service:8000')
 
 # Pydantic models
 class UserRegister(BaseModel):
@@ -196,11 +204,6 @@ def init_database():
         conn.commit()
         print("✅ Database initialized successfully")
 
-# Initialize database on startup
-@app.on_event("startup")
-async def startup_event():
-    init_database()
-    print("🚀 CyberNova AI API Gateway started successfully")
 # Authentication helper functions
 def hash_password(password: str) -> str:
     """Hash password using bcrypt"""
@@ -256,31 +259,10 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     except Exception as e:
         raise HTTPException(status_code=401, detail="Authentication failed")
 
-# Email helper function
-async def send_email(to_email: str, subject: str, body: str):
-    """Send email notification"""
-    try:
-        message = MIMEMultipart()
-        message["From"] = EMAIL_USER
-        message["To"] = to_email
-        message["Subject"] = subject
-        
-        message.attach(MIMEText(body, "plain"))
-        
-        context = ssl.create_default_context()
-        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
-            server.starttls(context=context)
-            server.login(EMAIL_USER, EMAIL_PASS)
-            server.sendmail(EMAIL_USER, to_email, message.as_string())
-        
-        print(f"✅ Email sent successfully to {to_email}")
-    except Exception as e:
-        print(f"❌ Email failed to send: {e}")
-
 # ==================== AUTHENTICATION ENDPOINTS ====================
 
 @app.post("/api/auth/register")
-async def register_user(user_data: UserRegister, background_tasks: BackgroundTasks):
+async def register_user(user_data: UserRegister):
     """Register new user"""
     try:
         with get_db_connection() as conn:
@@ -307,33 +289,6 @@ async def register_user(user_data: UserRegister, background_tasks: BackgroundTas
             
             # Create JWT token
             token = create_jwt_token(user_id, user_data.email)
-            
-            # Send welcome email
-            welcome_email_body = f"""
-Welcome to CyberNova AI!
-
-Hi {user_data.full_name},
-
-Your account has been successfully created! You now have access to our advanced cybersecurity platform.
-
-Features available to you:
-• Real-time threat detection
-• Comprehensive security scanning
-• AI-powered vulnerability assessment
-• 24/7 monitoring dashboard
-
-Login to your dashboard: https://cybernova-de84b.web.app/
-
-Best regards,
-The CyberNova AI Security Team
-            """
-            
-            background_tasks.add_task(
-                send_email,
-                user_data.email,
-                "Welcome to CyberNova AI - Account Created Successfully!",
-                welcome_email_body
-            )
             
             return {
                 "message": "User registered successfully",
@@ -393,24 +348,10 @@ async def login_user(user_data: UserLogin):
         print(f"Login error: {e}")
         raise HTTPException(status_code=500, detail="Login failed")
 
-@app.get("/api/auth/me")
-async def get_current_user_info(current_user: dict = Depends(get_current_user)):
-    """Get current user information"""
-    return {
-        "user": current_user
-    }
+# ==================== REAL SYSTEM SCANNING FUNCTIONS ====================
 
-@app.post("/api/auth/logout")
-async def logout_user(current_user: dict = Depends(get_current_user)):
-    """Logout user (client should discard token)"""
-    return {
-        "message": "Logout successful"
-    }
-
-# ==================== SYSTEM SCANNING FUNCTIONS ====================
-
-def get_system_info():
-    """Get comprehensive system information"""
+def get_real_system_info():
+    """Get REAL system information from the actual device"""
     try:
         hostname = platform.node()
         system = platform.system()
@@ -418,7 +359,7 @@ def get_system_info():
         architecture = platform.architecture()[0]
         processor = platform.processor()
         
-        # Get IP address
+        # Get REAL IP address
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
@@ -427,7 +368,7 @@ def get_system_info():
         except:
             ip_address = "127.0.0.1"
         
-        # Get memory info
+        # Get REAL memory info
         memory = psutil.virtual_memory()
         
         return {
@@ -450,8 +391,8 @@ def get_system_info():
             "error": str(e)
         }
 
-def scan_suspicious_processes():
-    """Scan for suspicious processes"""
+def scan_real_suspicious_processes():
+    """Scan for REAL suspicious processes on the actual device"""
     suspicious_processes = []
     
     try:
@@ -529,8 +470,8 @@ def scan_suspicious_processes():
     
     return suspicious_processes
 
-def scan_network_connections():
-    """Scan for suspicious network connections"""
+def scan_real_network_connections():
+    """Scan for REAL suspicious network connections on the actual device"""
     suspicious_connections = []
     
     try:
@@ -554,7 +495,7 @@ def scan_network_connections():
                     threat_level = "high"
                     activity_description = f"Connection to high-risk port {remote_port}"
                 
-                # Get process information
+                # Get REAL process information
                 process_name = "Unknown"
                 process_exe = ""
                 if conn.pid:
@@ -583,8 +524,8 @@ def scan_network_connections():
     
     return suspicious_connections
 
-def scan_risky_ports():
-    """Scan for risky open ports"""
+def scan_real_risky_ports():
+    """Scan for REAL risky open ports on the actual device"""
     risky_ports = []
     
     # Common risky ports to check
@@ -623,8 +564,8 @@ def scan_risky_ports():
     
     return risky_ports
 
-def generate_security_recommendations(processes, connections, ports):
-    """Generate security recommendations based on scan results"""
+def generate_real_security_recommendations(processes, connections, ports):
+    """Generate REAL security recommendations based on actual scan results"""
     recommendations = []
     
     # Process-based recommendations
@@ -634,7 +575,7 @@ def generate_security_recommendations(processes, connections, ports):
             "type": "malware",
             "priority": "critical",
             "title": "Remove Suspicious Processes",
-            "description": f"{len(high_threat_processes)} high-risk processes detected",
+            "description": f"{len(high_threat_processes)} high-risk processes detected on your system",
             "action": "Terminate suspicious processes and run full system scan",
             "details": json.dumps([p['name'] for p in high_threat_processes[:5]])
         })
@@ -646,7 +587,7 @@ def generate_security_recommendations(processes, connections, ports):
             "type": "network",
             "priority": "high",
             "title": "Block Suspicious Network Traffic",
-            "description": f"{len(high_risk_connections)} suspicious network connections found",
+            "description": f"{len(high_risk_connections)} suspicious network connections found on your system",
             "action": "Review and block unauthorized network connections",
             "details": json.dumps([f"{c['remote_ip']}:{c['remote_port']}" for c in high_risk_connections[:5]])
         })
@@ -658,33 +599,32 @@ def generate_security_recommendations(processes, connections, ports):
             "type": "security",
             "priority": "critical",
             "title": "Secure Critical Ports",
-            "description": f"{len(critical_ports)} critical ports are exposed",
+            "description": f"{len(critical_ports)} critical ports are exposed on your system",
             "action": "Disable unnecessary services or implement strong security",
             "details": json.dumps([f"Port {p['port']} ({p['service']})" for p in critical_ports])
         })
     
     return recommendations
-# ==================== SCANNING ENDPOINTS ====================
 
-def perform_comprehensive_scan():
-    """Perform comprehensive security scan"""
+def perform_real_comprehensive_scan():
+    """Perform comprehensive REAL security scan of the actual device"""
     try:
-        print("🔍 Starting comprehensive security scan...")
+        print("🔍 Starting REAL comprehensive security scan of your device...")
         
-        # Get system information
-        system_info = get_system_info()
+        # Get REAL system information
+        system_info = get_real_system_info()
         
-        # Scan for threats
-        suspicious_processes = scan_suspicious_processes()
-        network_connections = scan_network_connections()
-        risky_ports = scan_risky_ports()
+        # Scan for REAL threats
+        suspicious_processes = scan_real_suspicious_processes()
+        network_connections = scan_real_network_connections()
+        risky_ports = scan_real_risky_ports()
         
-        # Generate recommendations
-        recommendations = generate_security_recommendations(
+        # Generate REAL recommendations
+        recommendations = generate_real_security_recommendations(
             suspicious_processes, network_connections, risky_ports
         )
         
-        print(f"✅ Scan completed: {len(suspicious_processes)} processes, {len(network_connections)} connections, {len(risky_ports)} ports")
+        print(f"✅ REAL scan completed: {len(suspicious_processes)} processes, {len(network_connections)} connections, {len(risky_ports)} ports")
         
         return {
             "system_info": system_info,
@@ -697,27 +637,29 @@ def perform_comprehensive_scan():
         }
         
     except Exception as e:
-        print(f"❌ Scan error: {e}")
-        raise Exception(f"Scan failed: {str(e)}")
+        print(f"❌ REAL scan error: {e}")
+        raise Exception(f"REAL scan failed: {str(e)}")
+
+# ==================== SCANNING ENDPOINTS ====================
 
 @app.post("/api/scan/start")
-async def start_security_scan(
+async def start_real_security_scan(
     scan_request: Optional[ScanRequest] = None,
     background_tasks: BackgroundTasks = BackgroundTasks(),
     current_user: dict = Depends(get_current_user)
 ):
-    """Start comprehensive security scan"""
+    """Start comprehensive REAL security scan of the user's device"""
     try:
         ist = timezone(timedelta(hours=5, minutes=30))
         scan_id = f"scan_{int(time.time())}_{random.randint(1000, 9999)}"
         user_id = current_user["id"]
         
-        print(f"🚀 Starting scan {scan_id} for user {user_id}")
+        print(f"🚀 Starting REAL scan {scan_id} for user {user_id}")
         
-        # Perform the actual scan
-        scan_results = perform_comprehensive_scan()
+        # Perform the REAL scan
+        scan_results = perform_real_comprehensive_scan()
         
-        # Save scan results to database
+        # Save REAL scan results to database
         with get_db_connection() as conn:
             # Insert main scan record
             conn.execute(
@@ -736,7 +678,7 @@ async def start_security_scan(
                 )
             )
             
-            # Insert suspicious processes
+            # Insert REAL suspicious processes
             for proc in scan_results["suspicious_processes"]:
                 conn.execute(
                     """INSERT INTO suspicious_processes 
@@ -757,7 +699,7 @@ async def start_security_scan(
                     )
                 )
             
-            # Insert network connections
+            # Insert REAL network connections
             for conn_data in scan_results["network_connections"]:
                 conn.execute(
                     """INSERT INTO network_connections 
@@ -779,7 +721,7 @@ async def start_security_scan(
                     )
                 )
             
-            # Insert risky ports
+            # Insert REAL risky ports
             for port in scan_results["risky_ports"]:
                 conn.execute(
                     """INSERT INTO risky_ports 
@@ -795,7 +737,7 @@ async def start_security_scan(
                     )
                 )
             
-            # Insert security recommendations
+            # Insert REAL security recommendations
             for rec in scan_results["recommendations"]:
                 conn.execute(
                     """INSERT INTO security_recommendations 
@@ -813,56 +755,23 @@ async def start_security_scan(
                 )
             
             conn.commit()
-            print(f"✅ Scan results saved to database: {scan_results['total_threats']} threats detected")
-        
-        # Send notification email for high-risk findings
-        high_risk_threats = [
-            p for p in scan_results["suspicious_processes"] if p["threat_level"] in ["high", "critical"]
-        ] + [
-            p for p in scan_results["risky_ports"] if p["threat_level"] in ["high", "critical"]
-        ]
-        
-        if high_risk_threats:
-            email_body = f"""
-Security Alert - CyberNova AI
-
-Hi {current_user["full_name"]},
-
-Our security scan has detected {len(high_risk_threats)} high-risk threats on your system.
-
-Scan ID: {scan_id}
-Total Threats: {scan_results["total_threats"]}
-High-Risk Threats: {len(high_risk_threats)}
-
-Please review your dashboard immediately: https://cybernova-de84b.web.app/
-
-Stay secure,
-CyberNova AI Security Team
-            """
-            
-            background_tasks.add_task(
-                send_email,
-                current_user["email"],
-                f"🚨 Security Alert - {len(high_risk_threats)} High-Risk Threats Detected",
-                email_body
-            )
+            print(f"✅ REAL scan results saved to database: {scan_results['total_threats']} threats detected")
         
         return {
             "status": "success",
             "scan_id": scan_id,
             "threats_detected": scan_results["total_threats"],
-            "high_risk_threats": len(high_risk_threats),
             "scan_time": scan_results["scan_timestamp"],
-            "message": f"Security scan completed successfully. {scan_results['total_threats']} threats detected."
+            "message": f"REAL security scan completed successfully. {scan_results['total_threats']} threats detected on your device."
         }
         
     except Exception as e:
-        print(f"❌ Scan failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Security scan failed: {str(e)}")
+        print(f"❌ REAL scan failed: {e}")
+        raise HTTPException(status_code=500, detail=f"REAL security scan failed: {str(e)}")
 
 @app.post("/api/scan/reset")
-async def reset_scan_data(current_user: dict = Depends(get_current_user)):
-    """Reset all scan data for current user"""
+async def reset_real_scan_data(current_user: dict = Depends(get_current_user)):
+    """Reset all REAL scan data for current user"""
     try:
         user_id = current_user["id"]
         
@@ -876,7 +785,7 @@ async def reset_scan_data(current_user: dict = Depends(get_current_user)):
             scan_id_list = [row["scan_id"] for row in scan_ids]
             
             if scan_id_list:
-                # Delete related data
+                # Delete related REAL data
                 placeholders = ','.join(['?' for _ in scan_id_list])
                 
                 conn.execute(f"DELETE FROM security_recommendations WHERE scan_id IN ({placeholders})", scan_id_list)
@@ -886,28 +795,28 @@ async def reset_scan_data(current_user: dict = Depends(get_current_user)):
                 conn.execute(f"DELETE FROM system_scans WHERE scan_id IN ({placeholders})", scan_id_list)
                 
                 conn.commit()
-                print(f"✅ Reset scan data for user {user_id}: {len(scan_id_list)} scans deleted")
+                print(f"✅ Reset REAL scan data for user {user_id}: {len(scan_id_list)} scans deleted")
             
             return {
                 "status": "success",
-                "message": f"Successfully reset {len(scan_id_list)} scans and all related data",
+                "message": f"Successfully reset {len(scan_id_list)} REAL scans and all related data",
                 "scans_deleted": len(scan_id_list)
             }
             
     except Exception as e:
         print(f"❌ Reset failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to reset scan data: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to reset REAL scan data: {str(e)}")
 
 # ==================== DASHBOARD DATA ENDPOINT ====================
 
 @app.get("/api/dashboard/data")
-async def get_dashboard_data(current_user: dict = Depends(get_current_user)):
-    """Get comprehensive dashboard data for current user"""
+async def get_real_dashboard_data(current_user: dict = Depends(get_current_user)):
+    """Get comprehensive REAL dashboard data for current user"""
     try:
         user_id = current_user["id"]
         
         with get_db_connection() as conn:
-            # Get latest scan
+            # Get latest REAL scan
             latest_scan = conn.execute(
                 """SELECT * FROM system_scans 
                    WHERE user_id = ? 
@@ -925,7 +834,7 @@ async def get_dashboard_data(current_user: dict = Depends(get_current_user)):
                         "riskScore": 0,
                         "systemHealth": 100,
                         "lastScanTime": None,
-                        "scanStatus": "No scans yet"
+                        "scanStatus": "No REAL scans yet"
                     },
                     "alerts": [],
                     "scanData": None
@@ -933,7 +842,7 @@ async def get_dashboard_data(current_user: dict = Depends(get_current_user)):
             
             scan_id = latest_scan["scan_id"]
             
-            # Get threats data
+            # Get REAL threats data
             processes = conn.execute(
                 "SELECT * FROM suspicious_processes WHERE scan_id = ? ORDER BY created_at DESC",
                 (scan_id,)
@@ -954,10 +863,10 @@ async def get_dashboard_data(current_user: dict = Depends(get_current_user)):
                 (scan_id,)
             ).fetchall()
             
-            # Build alerts
+            # Build REAL alerts
             alerts = []
             
-            # Process alerts
+            # Process alerts from REAL data
             for proc in processes:
                 if proc["threat_level"] in ["high", "critical"]:
                     threat_reasons = []
@@ -969,38 +878,38 @@ async def get_dashboard_data(current_user: dict = Depends(get_current_user)):
                     
                     alerts.append({
                         "id": f"process_{proc['pid']}_{proc['id']}",
-                        "title": f"Suspicious Process: {proc['name']}",
-                        "description": f"Real threat: {proc['name']} (PID: {proc['pid']}) - {', '.join(threat_reasons[:2]) if threat_reasons else 'High threat level'}",
+                        "title": f"REAL Process Threat: {proc['name']}",
+                        "description": f"REAL threat detected on your device: {proc['name']} (PID: {proc['pid']}) - {', '.join(threat_reasons[:2]) if threat_reasons else 'High threat level'}",
                         "severity": proc["threat_level"],
                         "timestamp": proc["created_at"],
-                        "sourceIp": "Local System",
+                        "sourceIp": "Your Device",
                         "riskScore": 90 if proc["threat_level"] == "critical" else 75,
                         "isBlocked": False,
                         "type": "process"
                     })
             
-            # Port alerts
+            # Port alerts from REAL data
             for port in ports:
                 if port["threat_level"] in ["high", "critical"]:
                     alerts.append({
                         "id": f"port_{port['port']}_{port['id']}",
-                        "title": f"Risky Port: {port['port']} ({port['service']})",
-                        "description": f"Real vulnerability: {port['reason']}",
+                        "title": f"REAL Port Risk: {port['port']} ({port['service']})",
+                        "description": f"REAL vulnerability on your device: {port['reason']}",
                         "severity": port["threat_level"],
                         "timestamp": port["created_at"],
-                        "sourceIp": "Local System",
+                        "sourceIp": "Your Device",
                         "riskScore": 85 if port["threat_level"] == "critical" else 65,
                         "isBlocked": False,
                         "type": "port"
                     })
             
-            # Network alerts
+            # Network alerts from REAL data
             for conn_data in connections:
                 if conn_data["threat_level"] in ["high", "critical"]:
                     alerts.append({
                         "id": f"network_{conn_data['remote_ip']}_{conn_data['id']}",
-                        "title": "Suspicious Network Activity",
-                        "description": f"Real threat: {conn_data['activity_description']}",
+                        "title": "REAL Network Threat",
+                        "description": f"REAL threat on your device: {conn_data['activity_description']}",
                         "severity": conn_data["threat_level"],
                         "timestamp": conn_data["created_at"],
                         "sourceIp": conn_data["remote_ip"],
@@ -1009,13 +918,13 @@ async def get_dashboard_data(current_user: dict = Depends(get_current_user)):
                         "type": "network"
                     })
             
-            # Calculate stats
+            # Calculate REAL stats from REAL data
             total_threats = len(processes) + len(ports) + len([c for c in connections if c["threat_level"] in ["medium", "high", "critical"]])
             active_alerts = len(alerts)
             risk_score = min(100, max(0, active_alerts * 12)) if active_alerts > 0 else 0
             system_health = max(0, 100 - risk_score)
             
-            # Parse system info
+            # Parse REAL system info
             system_info = {}
             if latest_scan["system_info"]:
                 try:
@@ -1044,38 +953,8 @@ async def get_dashboard_data(current_user: dict = Depends(get_current_user)):
             }
             
     except Exception as e:
-        print(f"❌ Dashboard data error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get dashboard data: {str(e)}")
-
-# ==================== ANALYTICS INTEGRATION ====================
-
-@app.get("/api/analytics/dashboard-metrics")
-async def get_analytics_metrics(current_user: dict = Depends(get_current_user)):
-    """Get analytics metrics from analytics service"""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(f"{ANALYTICS_SERVICE_URL}/api/analytics/dashboard-metrics")
-            if response.status_code == 200:
-                return response.json()
-            else:
-                return {"metrics": {}}
-    except Exception as e:
-        print(f"Analytics service error: {e}")
-        return {"metrics": {}}
-
-@app.get("/api/analytics/risk-assessment")
-async def get_risk_assessment(current_user: dict = Depends(get_current_user)):
-    """Get risk assessment from analytics service"""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(f"{ANALYTICS_SERVICE_URL}/api/analytics/risk-assessment")
-            if response.status_code == 200:
-                return response.json()
-            else:
-                return {"averageRiskScore": 0, "maxRiskScore": 0}
-    except Exception as e:
-        print(f"Analytics service error: {e}")
-        return {"averageRiskScore": 0, "maxRiskScore": 0}
+        print(f"❌ REAL dashboard data error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get REAL dashboard data: {str(e)}")
 
 # ==================== HEALTH & STATUS ====================
 
@@ -1089,11 +968,11 @@ async def health_check():
         
         return {
             "status": "healthy",
-            "service": "CyberNova AI API Gateway",
+            "service": "CyberNova AI REAL Data API Gateway",
             "version": "3.0.0",
             "timestamp": datetime.now().isoformat(),
             "database": "connected",
-            "analytics_service": "connected"
+            "scanning": "REAL device scanning enabled"
         }
     except Exception as e:
         return {
@@ -1106,17 +985,20 @@ async def health_check():
 async def root():
     """Root endpoint"""
     return {
-        "message": "CyberNova AI - Advanced Cybersecurity Platform",
+        "message": "CyberNova AI - REAL Data Cybersecurity Platform",
         "version": "3.0.0",
         "status": "operational",
+        "scanning": "REAL device scanning enabled",
         "documentation": "/docs"
     }
 
-# ==================== STARTUP MESSAGE ====================
+# Initialize database on startup
+@app.on_event("startup")
+async def startup_event():
+    init_database()
+    print("🚀 CyberNova AI REAL Data API Gateway started successfully")
+    print("🔍 REAL device scanning enabled - NO MOCK DATA")
 
 if __name__ == "__main__":
-    print("🚀 Starting CyberNova AI API Gateway...")
-    print("🔒 Security features: Active")
-    print("🔍 Scanning engine: Ready") 
-    print("📊 Analytics integration: Enabled")
-    print("✅ All systems operational")
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
