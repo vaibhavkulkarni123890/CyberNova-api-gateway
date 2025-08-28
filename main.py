@@ -29,22 +29,15 @@ import pytz
 from dotenv import load_dotenv
 import re
 load_dotenv()  # Load environment variables from .env file
-from appwrite.client import Client
-from appwrite.services.users import Users
-from appwrite.services.databases import Databases
-from appwrite.exception import AppwriteException
+
 import logging
 
 logging.basicConfig(level=logging.INFO)
 
-client = Client()
-client.set_endpoint(os.getenv('REACT_APP_APPWRITE_ENDPOINT'))
-client.set_project(os.getenv('REACT_APP_APPWRITE_PROJECT_ID'))
-client.set_key(os.getenv('APPWRITE_API_KEY'))
+
 
 # Initialize Appwrite services
-users_service = Users(client)
-databases_service = Databases(client)
+
 
 app = FastAPI(
     title="CyberNova AI - Advanced Cybersecurity Platform", 
@@ -472,9 +465,9 @@ def send_email(to_email: str, subject: str, body: str):
 
 @app.post("/api/auth/register")
 async def register_user(user_data: UserRegister, background_tasks: BackgroundTasks):
-    """Register new user in both local database and Appwrite"""
+    """Register new user - NO Appwrite SDK calls that cause errors"""
     
-    # Create user in local database (existing code)
+    # Create user in local database (your existing working code)
     with get_db_connection() as conn:
         existing_user = conn.execute(
             "SELECT id FROM users WHERE email = ?", (user_data.email,)
@@ -492,17 +485,7 @@ async def register_user(user_data: UserRegister, background_tasks: BackgroundTas
         user_id = cursor.lastrowid
         conn.commit()
     
-    # ALSO create user in Appwrite (optional - for Appwrite auth integration)
-    appwrite_result = await create_user_in_appwrite(
-        email=user_data.email,
-        password=user_data.password,
-        name=user_data.full_name
-    )
-    
-    if not appwrite_result["success"]:
-        logging.warning(f"Failed to create Appwrite user: {appwrite_result['error']}")
-        # Continue anyway - local user creation succeeded
-    
+    # Create JWT token
     token = create_jwt_token(user_id, user_data.email)
     
     # Send welcome email
@@ -511,7 +494,7 @@ Welcome to CyberNova AI!
 
 Hi {user_data.full_name},
 
-Your account has been successfully created! You now have access to our advanced cybersecurity platform.
+Your account has been successfully created! 
 
 Login to your dashboard: https://cybernova-de84b.web.app/
 
@@ -522,7 +505,7 @@ The CyberNova AI Team
     background_tasks.add_task(
         send_email,
         user_data.email,
-        "Welcome to CyberNova AI - Account Created Successfully!",
+        "Welcome to CyberNova AI",
         welcome_email_body
     )
     
@@ -534,9 +517,9 @@ The CyberNova AI Team
             "email": user_data.email,
             "full_name": user_data.full_name,
             "company": user_data.company
-        },
-        "appwrite_status": "created" if appwrite_result["success"] else "local_only"
+        }
     }
+
 
 
 # REMOVE this entire waitlist endpoint - delete it from your code:
@@ -1564,54 +1547,50 @@ async def health():
 # Fixed Appwrite integration functions
 # Replace the existing Appwrite functions with these corrected versions:
 
-async def create_user_in_appwrite(email: str, password: str, name: str) -> dict:
-    """Create user in Appwrite with proper API key authentication"""
-    try:
-        import uuid
-        user_id = str(uuid.uuid4())
-        
-        user = users_service.create(
-            user_id=user_id,
-            email=email,
-            password=password,
-            name=name
-        )
-        return {"success": True, "user": user}
+# Appwrite HTTP client for safe API calls
+async def safe_appwrite_call(method: str, endpoint: str, data: dict = None):
+    """Make direct HTTP calls to Appwrite API without SDK issues"""
+    url = f"{os.getenv('REACT_APP_APPWRITE_ENDPOINT')}{endpoint}"
+    headers = {
+        'X-Appwrite-Project': os.getenv('REACT_APP_APPWRITE_PROJECT_ID'),
+        'X-Appwrite-Key': os.getenv('APPWRITE_API_KEY'),
+        'Content-Type': 'application/json'
+    }
     
-    except AppwriteException as e:
-        logging.error(f"Appwrite user creation error: {e}")
-        return {"success": False, "error": str(e)}
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            if method.upper() == 'GET':
+                response = await client.get(url, headers=headers)
+            elif method.upper() == 'POST':
+                response = await client.post(url, headers=headers, json=data or {})
+            else:
+                raise ValueError(f"Unsupported method: {method}")
+            
+            response.raise_for_status()
+            return response.json()
     except Exception as e:
-        logging.error(f"General error creating user: {e}")
-        return {"success": False, "error": str(e)}
+        print(f"Appwrite API call failed: {e}")
+        return {"error": str(e)}
+
+# Replace user operations
+async def create_user_in_appwrite(email: str, password: str, name: str):
+    """Create user via direct API call"""
+    import uuid
+    user_data = {
+        "userId": str(uuid.uuid4()),
+        "email": email,
+        "password": password,
+        "name": name
+    }
+    return await safe_appwrite_call('POST', '/users', user_data)
+
+async def list_appwrite_users():
+    """List users via direct API call"""
+    return await safe_appwrite_call('GET', '/users')
 
 # Appwrite Configuration
 
-async def get_appwrite_users() -> dict:
-    """Get users from Appwrite with proper API key authentication"""
-    try:
-        # Use the service with proper API key authentication
-        users_list = users_service.list()
-        return {"success": True, "users": users_list}
-    
-    except AppwriteException as e:
-        logging.error(f"Appwrite list users error: {e}")
-        return {"success": False, "error": str(e)}
-    except Exception as e:
-        logging.error(f"General error listing users: {e}")
-        return {"success": False, "error": str(e)}
-async def get_appwrite_user_by_id(user_id: str) -> dict:
-    """Get specific user from Appwrite"""
-    try:
-        user = users_service.get(user_id)
-        return {"success": True, "user": user}
-    
-    except AppwriteException as e:
-        logging.error(f"Appwrite get user error: {e}")
-        return {"success": False, "error": str(e)}
-    except Exception as e:
-        logging.error(f"General error getting user: {e}")
-        return {"success": False, "error": str(e)}
+
 
 async def update_appwrite_user(user_id: str, name: str = None, email: str = None) -> dict:
     """Update user in Appwrite"""
